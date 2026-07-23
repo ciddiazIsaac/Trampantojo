@@ -134,10 +134,11 @@ impl IocRepository for PgIocRepository {
 
         let existing = existing_row.map(Ioc::try_from).transpose()?;
         
-        // Si hay un ID de deduplicación (ej: hash de IP comunitaria),
-        // intentamos insertarlo primero. Si la fila ya existía (0 rows affected),
+        // Si hay un ID de deduplicación (ej: hash de IP comunitaria) Y la fuente
+        // es comunitaria, intentamos insertarlo primero. Si la fila ya existía (0 rows affected),
         // abortamos la fusión: este reportante ya había votado por este indicador.
-        if let Some(reporter_hash) = deduplication_id {
+        // Las fuentes oficiales NUNCA pasan por este gate, aunque traigan un ID por error.
+        if let (Some(reporter_hash), Source::Community { .. }) = (deduplication_id, &incoming.source) {
             let inserted = sqlx::query(
                 "INSERT INTO community_reports (indicator_type, value, reporter_hash)
                  VALUES ($1::indicator_type, $2, $3)
