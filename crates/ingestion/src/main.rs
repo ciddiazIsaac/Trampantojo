@@ -1,6 +1,6 @@
 use axum::{
     extract::{ConnectInfo, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::post,
     Json, Router,
@@ -12,6 +12,36 @@ use sqlx::postgres::PgPoolOptions;
 use std::{net::SocketAddr, sync::Arc};
 use storage::{clickhouse::ClickHouseIocEventStore, postgres::PgIocRepository};
 use trampantojo_core::{IndicatorType, Ioc, IocEventStore, IocRepository, IocStatus, Source, TrustScore};
+
+// ---------------------------------------------------------------------------
+// Tipos de entrada de la API pública
+//
+// IndicatorType en el dominio usa #[serde(tag = "type")] para serializar como
+// {"type": "domain"} — correcto para almacenamiento interno, horrible para un
+// endpoint público. IndicatorTypeInput serializa/deserializa como string plano
+// ("domain", "url", etc.) y luego convertimos al tipo de dominio.
+// ---------------------------------------------------------------------------
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum IndicatorTypeInput {
+    Domain,
+    Url,
+    IpAddress,
+    PhoneNumber,
+    FileHash,
+}
+
+impl From<IndicatorTypeInput> for IndicatorType {
+    fn from(v: IndicatorTypeInput) -> Self {
+        match v {
+            IndicatorTypeInput::Domain => IndicatorType::Domain,
+            IndicatorTypeInput::Url => IndicatorType::Url,
+            IndicatorTypeInput::IpAddress => IndicatorType::IpAddress,
+            IndicatorTypeInput::PhoneNumber => IndicatorType::PhoneNumber,
+            IndicatorTypeInput::FileHash => IndicatorType::FileHash,
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Ingestion Pipeline
@@ -74,7 +104,7 @@ struct AppState {
 
 #[derive(Deserialize)]
 struct ReportParams {
-    indicator_type: IndicatorType,
+    indicator_type: IndicatorTypeInput,
     value: String,
     impersonates: Option<String>,
 }
@@ -85,25 +115,34 @@ struct ReportParams {
 async fn report_indicator(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(params): Json<ReportParams>,
 ) -> impl IntoResponse {
     let normalized = trampantojo_core::normalize_ioc_value(&params.value);
 
-    // Identidad liviana: hash(IP)
-    let ip_str = addr.ip().to_string();
+    // Identidad liviana: proxy-aware IP
+    let ip_str = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| addr.ip().to_string());
+
     let mut hasher = Sha256::new();
     hasher.update(ip_str.as_bytes());
     let reporter_hash = hex::encode(hasher.finalize());
 
     let incoming = Ioc {
         id: uuid::Uuid::new_v4(),
-        indicator_type: params.indicator_type,
+        indicator_type: params.indicator_type.into(),
         value: normalized,
-        // Empezamos asumiendo 0 corroboraciones; el merge se encarga de sumar.
-        source: Source::Community { corroborations: 0 },
+        source: Source::Community { corroborations: 1 },
         trust_score: TrustScore {
-            value: 0.0,
-            factors: vec![],
+            value: trampantojo_core::Ioc::community_score(1),
+            factors: vec![trampantojo_core::ScoreFactor {
+                reason: "1 reportes comunitarios corroborados".into(),
+                weight: 1.0,
+            }],
         },
         status: IocStatus::Active,
         impersonates: params.impersonates,
@@ -126,6 +165,7 @@ async fn report_indicator(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
     tracing_subscriber::fmt::init();
 
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL debe estar seteado");

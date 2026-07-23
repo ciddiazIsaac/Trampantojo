@@ -134,26 +134,23 @@ impl IocRepository for PgIocRepository {
 
         let existing = existing_row.map(Ioc::try_from).transpose()?;
         
-        // Si hay un ID de deduplicación (ej: hash de IP comunitaria) Y la fuente
-        // es comunitaria, intentamos insertarlo primero. Si la fila ya existía (0 rows affected),
-        // abortamos la fusión: este reportante ya había votado por este indicador.
-        // Las fuentes oficiales NUNCA pasan por este gate, aunque traigan un ID por error.
+        // Pre-check deduplicación: si ya existe la combinación (reporter_hash, indicador),
+        // sabemos antes del merge que este reporte es duplicado y podemos salir temprano.
+        // La lectura es bajo la misma transacción (bloqueo de fila en iocs ya activo),
+        // así que es atómica respecto a cualquier otro upsert concurrente del mismo indicador.
         if let (Some(reporter_hash), Source::Community { .. }) = (deduplication_id, &incoming.source) {
-            let inserted = sqlx::query(
-                "INSERT INTO community_reports (indicator_type, value, reporter_hash)
-                 VALUES ($1::indicator_type, $2, $3)
-                 ON CONFLICT DO NOTHING"
+            let already_reported: Option<(i32,)> = sqlx::query_as(
+                "SELECT 1 FROM community_reports
+                 WHERE indicator_type = $1::indicator_type AND value = $2 AND reporter_hash = $3"
             )
             .bind(indicator_type_to_db(&incoming.indicator_type))
             .bind(&incoming.value)
             .bind(reporter_hash)
-            .execute(&mut *tx)
+            .fetch_optional(&mut *tx)
             .await?;
 
-            if inserted.rows_affected() == 0 {
+            if already_reported.is_some() {
                 tx.commit().await?;
-                // Devolvemos el estado actual (o el entrante si por alguna razón extraña
-                // existía en la tabla de deduplicación pero no en iocs).
                 return Ok(MergeOutcome {
                     ioc: existing.unwrap_or(incoming.clone()),
                     trust_before: None,
@@ -202,6 +199,21 @@ impl IocRepository for PgIocRepository {
         .bind(merged.last_seen)
         .execute(&mut *tx)
         .await?;
+
+        // Ahora que iocs ya tiene la fila (FK satisfecha), insertamos el registro
+        // de deduplicación para futuros reportes del mismo reportante.
+        if let (Some(reporter_hash), Source::Community { .. }) = (deduplication_id, &merged.source) {
+            sqlx::query(
+                "INSERT INTO community_reports (indicator_type, value, reporter_hash)
+                 VALUES ($1::indicator_type, $2, $3)
+                 ON CONFLICT DO NOTHING"
+            )
+            .bind(indicator_type_to_db(&merged.indicator_type))
+            .bind(&merged.value)
+            .bind(reporter_hash)
+            .execute(&mut *tx)
+            .await?;
+        }
 
         tx.commit().await?;
         Ok(MergeOutcome {

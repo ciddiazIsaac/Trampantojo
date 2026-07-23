@@ -20,11 +20,10 @@
 
 CREATE TABLE IF NOT EXISTS ioc_score_events
 (
-    -- UUID generado en Rust en el momento del merge, no en CH.
-    -- Razón: si el insert falla y se reintenta, queremos idempotencia
-    -- eventual (aunque CH no garantiza exactly-once, el UUID ayuda a
-    -- detectar duplicados en un dedup posterior si fuera necesario).
-    event_id             UUID,
+    -- String en vez de UUID nativo para evitar la complejidad de serialización
+    -- RowBinary UUID del crate clickhouse-rs. El valor sigue siendo un UUID v4
+    -- generado en Rust — la idempotencia se mantiene.
+    event_id             String,
 
     ioc_value            String,
 

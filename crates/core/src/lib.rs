@@ -187,7 +187,7 @@ impl Ioc {
     /// la anterior. Con n=1 → ~0.30, n=5 → ~0.66, n=15 → ~0.77, nunca
     /// cruza 0.78. Ajustable, pero el tope bajo 0.8 es una decisión
     /// deliberada, no un número al azar.
-    fn community_score(n: u32) -> f32 {
+    pub fn community_score(n: u32) -> f32 {
         (1.0 - 0.7_f32.powi(n as i32)).min(0.78)
     }
 }

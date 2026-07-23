@@ -24,7 +24,10 @@ use uuid::Uuid;
 #[derive(Row, Serialize)]
 struct ScoreEventRow {
     /// Generado en Rust para idempotencia en reintentos.
-    event_id: uuid::Uuid,
+    /// Usamos String porque el crate clickhouse serializa uuid::Uuid como [u8;16]
+    /// (RowBinary raw), incompatible con el tipo UUID de ClickHouse via HTTP.
+    /// String se recibe como UUID string y ClickHouse lo parsea correctamente.
+    event_id: String,
 
     ioc_value: String,
 
@@ -98,7 +101,7 @@ impl IocEventStore for ClickHouseIocEventStore {
         };
 
         let row = ScoreEventRow {
-            event_id: Uuid::new_v4(),
+            event_id: Uuid::new_v4().to_string(),
             ioc_value: ioc.value.clone(),
             ioc_type: indicator_type_str(&ioc.indicator_type).to_string(),
             impersonates: ioc.impersonates.clone().unwrap_or_default(),
