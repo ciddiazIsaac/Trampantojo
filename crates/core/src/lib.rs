@@ -102,6 +102,22 @@ impl TrustScore {
 }
 
 // ---------------------------------------------------------------------
+// MergeOutcome
+// ---------------------------------------------------------------------
+
+/// Resultado de una fusión de IoC bajo lock. Devuelve el indicador final
+/// y el trust score que tenía ANTES del merge. Esto es crucial para
+/// alimentar a ClickHouse sin condiciones de carrera (TOCTOU).
+#[derive(Debug)]
+pub struct MergeOutcome {
+    pub ioc: Ioc,
+    pub trust_before: Option<f32>,
+    /// Indica si el estado realmente se alteró (true). Si es false, significa
+    /// que el reporte fue descartado por deduplicación (ej: misma IP).
+    pub was_merged: bool,
+}
+
+// ---------------------------------------------------------------------
 // Repository traits — cada binario implementa el backend que necesita,
 // pero todos hablan el mismo lenguaje de dominio.
 // ---------------------------------------------------------------------
@@ -109,7 +125,7 @@ impl TrustScore {
 #[async_trait::async_trait]
 pub trait IocRepository: Send + Sync {
     /// Estado actual — respaldado por Postgres, es lo que consulta la API.
-    async fn upsert(&self, ioc: &Ioc) -> anyhow::Result<()>;
+    async fn upsert(&self, ioc: &Ioc, deduplication_id: Option<&str>) -> anyhow::Result<MergeOutcome>;
     async fn find_by_value(&self, value: &str) -> anyhow::Result<Option<Ioc>>;
 }
 
@@ -117,7 +133,7 @@ pub trait IocRepository: Send + Sync {
 pub trait IocEventStore: Send + Sync {
     /// Log de eventos append-only — respaldado por ClickHouse, es lo que
     /// alimenta el dashboard de tendencias. Nunca se actualiza, solo se agrega.
-    async fn record_scoring_event(&self, ioc: &Ioc) -> anyhow::Result<()>;
+    async fn record_scoring_event(&self, ioc: &Ioc, trust_before: Option<f32>) -> anyhow::Result<()>;
     async fn record_verification_query(&self, value: &str, matched: bool) -> anyhow::Result<()>;
 }
 

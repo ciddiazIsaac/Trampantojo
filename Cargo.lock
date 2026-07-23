@@ -886,6 +886,21 @@ dependencies = [
 [[package]]
 name = "ingestion"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
+ "hex",
+ "serde",
+ "sha2",
+ "sqlx",
+ "storage",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "trampantojo-core",
+ "uuid",
+]
 
 [[package]]
 name = "itoa"

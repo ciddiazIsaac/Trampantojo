@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{FromRow, PgPool};
-use trampantojo_core::{Ioc, IocRepository, IocStatus, IndicatorType, Source, TrustScore};
+use trampantojo_core::{Ioc, IocRepository, IocStatus, IndicatorType, Source, TrustScore, MergeOutcome};
 use uuid::Uuid;
 
 pub struct PgIocRepository {
@@ -120,8 +120,9 @@ impl IocRepository for PgIocRepository {
 
     /// Lock de fila + fusión en Rust puro (`Ioc::merge`, testeada aparte)
     /// + un solo write. La transacción evita que dos ingestas concurrentes
-    /// se pisen la corroboración una a la otra.
-    async fn upsert(&self, incoming: &Ioc) -> anyhow::Result<()> {
+    /// se pisen la corroboración una a la otra, y además asegura que
+    /// el check de deduplicación sea atómico.
+    async fn upsert(&self, incoming: &Ioc, deduplication_id: Option<&str>) -> anyhow::Result<MergeOutcome> {
         let mut tx = self.pool.begin().await?;
 
         let existing_row: Option<IocRow> = sqlx::query_as(&format!(
@@ -132,6 +133,35 @@ impl IocRepository for PgIocRepository {
         .await?;
 
         let existing = existing_row.map(Ioc::try_from).transpose()?;
+        
+        // Si hay un ID de deduplicación (ej: hash de IP comunitaria),
+        // intentamos insertarlo primero. Si la fila ya existía (0 rows affected),
+        // abortamos la fusión: este reportante ya había votado por este indicador.
+        if let Some(reporter_hash) = deduplication_id {
+            let inserted = sqlx::query(
+                "INSERT INTO community_reports (indicator_type, value, reporter_hash)
+                 VALUES ($1::indicator_type, $2, $3)
+                 ON CONFLICT DO NOTHING"
+            )
+            .bind(indicator_type_to_db(&incoming.indicator_type))
+            .bind(&incoming.value)
+            .bind(reporter_hash)
+            .execute(&mut *tx)
+            .await?;
+
+            if inserted.rows_affected() == 0 {
+                tx.commit().await?;
+                // Devolvemos el estado actual (o el entrante si por alguna razón extraña
+                // existía en la tabla de deduplicación pero no en iocs).
+                return Ok(MergeOutcome {
+                    ioc: existing.unwrap_or(incoming.clone()),
+                    trust_before: None,
+                    was_merged: false,
+                });
+            }
+        }
+
+        let trust_before = existing.as_ref().map(|e| e.trust_score.value);
         let merged = Ioc::merge(existing, incoming.clone());
 
         let (source_kind, source_issuer, source_advisory_url, corroborations) = match &merged.source {
@@ -173,6 +203,10 @@ impl IocRepository for PgIocRepository {
         .await?;
 
         tx.commit().await?;
-        Ok(())
+        Ok(MergeOutcome {
+            ioc: merged,
+            trust_before,
+            was_merged: true,
+        })
     }
 }

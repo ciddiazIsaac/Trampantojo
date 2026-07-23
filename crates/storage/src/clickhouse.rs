@@ -91,15 +91,7 @@ impl IocEventStore for ClickHouseIocEventStore {
     /// Registra un evento de scoring para cada Ioc::merge ejecutado,
     /// sin importar si el trust_value cambió. Ver docs de IocEventStore
     /// en trampantojo-core para la justificación del "evento por merge".
-    async fn record_scoring_event(&self, ioc: &Ioc) -> anyhow::Result<()> {
-        // trust_before: en el primer merge no hay estado previo, así que
-        // el llamador debe pasar el Ioc *después* del merge. Para capturar
-        // trust_before, el ingestion pipeline necesita leerlo antes del merge
-        // y pasarlo por separado — eso es responsabilidad del pipeline, no
-        // de este store. Por ahora: None indica primer ingreso.
-        //
-        // TODO: refactorizar la firma para recibir trust_before explícito
-        // cuando el pipeline de ingestion esté completo.
+    async fn record_scoring_event(&self, ioc: &Ioc, trust_before: Option<f32>) -> anyhow::Result<()> {
         let (source_issuer, corroborations_after) = match &ioc.source {
             Source::Official { issuer, .. } => (Some(issuer.clone()), 0u32),
             Source::Community { corroborations } => (None, *corroborations),
@@ -113,7 +105,7 @@ impl IocEventStore for ClickHouseIocEventStore {
             source_kind: source_kind_str(&ioc.source).to_string(),
             source_issuer,
             corroborations_after,
-            trust_before: None, // ver TODO arriba
+            trust_before,
             trust_after: ioc.trust_score.value,
             // chrono::DateTime<Utc>.timestamp_millis() → i64
             merged_at: ioc.last_seen.timestamp_millis(),
