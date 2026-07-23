@@ -1,3 +1,11 @@
-﻿[workspace]
+[workspace]
 resolver = "2"
-members = ["crates/core", "crates/ingestion", "crates/scoring", "crates/api", "crates/notifier", "crates/whatsapp-bot"]
+members = [
+    "crates/core",
+    "crates/ingestion",
+    "crates/scoring",
+    "crates/api",
+    "crates/notifier",
+    "crates/whatsapp-bot",
+    "crates/storage"
+]

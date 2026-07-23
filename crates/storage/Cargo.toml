@@ -1,0 +1,12 @@
+[package]
+name = "storage"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+trampantojo-core = { path = "../core" }
+sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-rustls", "uuid", "chrono"] }
+async-trait = "0.1"
+anyhow = "1"
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"

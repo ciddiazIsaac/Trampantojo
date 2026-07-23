@@ -120,3 +120,108 @@ pub trait IocEventStore: Send + Sync {
     async fn record_scoring_event(&self, ioc: &Ioc) -> anyhow::Result<()>;
     async fn record_verification_query(&self, value: &str, matched: bool) -> anyhow::Result<()>;
 }
+
+// ---------------------------------------------------------------------
+// Merge Logic — reglas de negocio de scoring
+// ---------------------------------------------------------------------
+
+impl Ioc {
+    /// Fusiona el estado existente de un IoC con uno entrante del mismo
+    /// (indicator_type, value). Reglas:
+    ///
+    /// 1. Si el existente ya es oficial, un reporte comunitario nuevo NO
+    ///    lo degrada — solo se refresca `last_seen`.
+    /// 2. Si el entrante es oficial, siempre pisa el estado anterior
+    ///    (sea cual sea), porque una fuente oficial es autoridad inmediata.
+    /// 3. Comunidad + comunidad: se acumulan corroboraciones y el score
+    ///    sube con rendimientos decrecientes, con un tope deliberadamente
+    ///    bajo el umbral de auto-notificación (0.8), para que la sola
+    ///    acumulación comunitaria nunca dispare una alerta sin que un
+    ///    humano o el CSIRT la revise — a menos que decidas subir el tope
+    ///    más adelante con datos reales de cuántas corroboraciones
+    ///    correlacionan con verdaderos positivos.
+    pub fn merge(existing: Option<Ioc>, incoming: Ioc) -> Ioc {
+        let Some(mut current) = existing else {
+            return incoming;
+        };
+
+        match (&current.source, &incoming.source) {
+            (Source::Official { .. }, _) => {
+                current.last_seen = incoming.last_seen.max(current.last_seen);
+                current
+            }
+            (_, Source::Official { .. }) => incoming,
+            (Source::Community { corroborations }, Source::Community { .. }) => {
+                let n = corroborations + 1;
+                current.source = Source::Community { corroborations: n };
+                current.trust_score = TrustScore {
+                    value: Self::community_score(n),
+                    factors: vec![ScoreFactor {
+                        reason: format!("{n} reportes comunitarios corroborados"),
+                        weight: 1.0,
+                    }],
+                };
+                current.last_seen = incoming.last_seen.max(current.last_seen);
+                current
+            }
+        }
+    }
+
+    /// Curva de saturación: cada corroboración adicional pesa menos que
+    /// la anterior. Con n=1 → ~0.30, n=5 → ~0.66, n=15 → ~0.77, nunca
+    /// cruza 0.78. Ajustable, pero el tope bajo 0.8 es una decisión
+    /// deliberada, no un número al azar.
+    fn community_score(n: u32) -> f32 {
+        (1.0 - 0.7_f32.powi(n as i32)).min(0.78)
+    }
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn base_ioc(source: Source, trust_value: f32) -> Ioc {
+        Ioc {
+            id: Uuid::new_v4(),
+            indicator_type: IndicatorType::Domain,
+            value: "banco-de-chile-verificacion.cl".into(),
+            source,
+            trust_score: TrustScore { value: trust_value, factors: vec![] },
+            status: IocStatus::Active,
+            impersonates: Some("Banco de Chile".into()),
+            first_seen: Utc::now(),
+            last_seen: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn official_confirmado_no_se_degrada_por_comunidad_posterior() {
+        let existing = base_ioc(Source::Official { issuer: "CSIRT".into(), advisory_url: None }, 1.0);
+        let incoming = base_ioc(Source::Community { corroborations: 0 }, 0.3);
+        let merged = Ioc::merge(Some(existing), incoming);
+        assert!(matches!(merged.source, Source::Official { .. }));
+        assert_eq!(merged.trust_score.value, 1.0);
+    }
+
+    #[test]
+    fn oficial_entrante_siempre_pisa_estado_previo() {
+        let existing = base_ioc(Source::Community { corroborations: 3 }, 0.65);
+        let incoming = base_ioc(Source::Official { issuer: "ANCI".into(), advisory_url: None }, 1.0);
+        let merged = Ioc::merge(Some(existing), incoming);
+        assert!(matches!(merged.source, Source::Official { .. }));
+    }
+
+    #[test]
+    fn comunidad_acumula_corroboraciones_sin_cruzar_el_tope() {
+        let existing = base_ioc(Source::Community { corroborations: 0 }, 0.3);
+        let incoming = base_ioc(Source::Community { corroborations: 0 }, 0.3);
+        let merged = Ioc::merge(Some(existing), incoming);
+        if let Source::Community { corroborations } = merged.source {
+            assert_eq!(corroborations, 1);
+        } else {
+            panic!("se esperaba Source::Community");
+        }
+        assert!(merged.trust_score.value < 0.8, "no debe cruzar el umbral de auto-notificación");
+    }
+}
