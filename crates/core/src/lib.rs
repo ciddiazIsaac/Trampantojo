@@ -176,6 +176,28 @@ impl Ioc {
     }
 }
 
+/// Normaliza un valor entrante (convierte a minúsculas, quita espacios extra,
+/// y elimina prefijos como http/https si es aplicable).
+/// Esta función vive en el dominio porque es una regla de negocio que 
+/// tanto la API como la capa de ingestión deben compartir.
+pub fn normalize_ioc_value(value: &str) -> String {
+    let mut val = value.trim().to_lowercase();
+    if val.starts_with("http://") {
+        val = val.replacen("http://", "", 1);
+    } else if val.starts_with("https://") {
+        val = val.replacen("https://", "", 1);
+    }
+    // Opcional: remover www.
+    if val.starts_with("www.") {
+        val = val.replacen("www.", "", 1);
+    }
+    // Remover el trailing slash si existe
+    if val.ends_with('/') {
+        val.pop();
+    }
+    val
+}
+
 #[cfg(test)]
 mod merge_tests {
     use super::*;
