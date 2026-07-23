@@ -100,6 +100,7 @@ impl IngestionPipeline {
 #[derive(Clone)]
 struct AppState {
     pipeline: Arc<IngestionPipeline>,
+    trusted_proxies: Vec<ipnet::IpNet>,
 }
 
 #[derive(Deserialize)]
@@ -120,13 +121,23 @@ async fn report_indicator(
 ) -> impl IntoResponse {
     let normalized = trampantojo_core::normalize_ioc_value(&params.value);
 
-    // Identidad liviana: proxy-aware IP
-    let ip_str = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| addr.ip().to_string());
+    // Validar si la conexión TCP real viene de un proxy confiable
+    let is_trusted_proxy = state
+        .trusted_proxies
+        .iter()
+        .any(|net| net.contains(&addr.ip()));
+
+    // Identidad liviana: proxy-aware IP solo si viene de proxy confiable
+    let ip_str = if is_trusted_proxy {
+        headers
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.split(',').next())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| addr.ip().to_string())
+    } else {
+        addr.ip().to_string()
+    };
 
     let mut hasher = Sha256::new();
     hasher.update(ip_str.as_bytes());
@@ -180,7 +191,18 @@ async fn main() -> anyhow::Result<()> {
     let event_store = ClickHouseIocEventStore::new(&clickhouse_url);
     let pipeline = Arc::new(IngestionPipeline::new(repo, event_store));
 
-    let state = AppState { pipeline };
+    let trusted_proxies_str = std::env::var("TRUSTED_PROXIES")
+        .unwrap_or_else(|_| "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16".to_string());
+    
+    let trusted_proxies: Vec<ipnet::IpNet> = trusted_proxies_str
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+
+    let state = AppState {
+        pipeline,
+        trusted_proxies,
+    };
 
     let app = Router::new()
         .route("/v1/report", post(report_indicator))
