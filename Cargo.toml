@@ -1,0 +1,3 @@
+﻿[workspace]
+resolver = "2"
+members = ["crates/core", "crates/ingestion", "crates/scoring", "crates/api", "crates/notifier", "crates/whatsapp-bot"]
