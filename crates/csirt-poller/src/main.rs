@@ -1,4 +1,4 @@
-﻿//! csirt-poller
+//! csirt-poller
 //!
 //! Binario que consume la API REST pública del CSIRT Chile, filtra alertas de
 //! phishing con TLP:CLEAR y alimenta el IngestionPipeline con los IoC.
@@ -19,7 +19,11 @@ use std::time::Duration;
 use anyhow::Result;
 use ingestion::IngestionPipeline;
 use sqlx::postgres::PgPoolOptions;
-use storage::{clickhouse::ClickHouseIocEventStore, postgres::PgIocRepository};
+use storage::{
+    clickhouse::ClickHouseIocEventStore,
+    postgres::PgIocRepository,
+    redis_streams::RedisNotificationQueue,
+};
 use trampantojo_core::{Ioc, IocStatus, ScoreFactor, Source, TrustScore};
 use chrono::Utc;
 
@@ -45,7 +49,24 @@ async fn main() -> Result<()> {
 
     let repo        = PgIocRepository::new(pool.clone());
     let event_store = ClickHouseIocEventStore::new(&clickhouse_url);
-    let pipeline    = Arc::new(IngestionPipeline::new(repo, event_store));
+    let pipeline = match std::env::var("REDIS_URL") {
+        Ok(redis_url) => match RedisNotificationQueue::new(&redis_url).await {
+            Ok(queue) => {
+                tracing::info!("Cola de notificaciones Redis Streams conectada");
+                Arc::new(IngestionPipeline::with_notification_queue(
+                    repo, event_store, Arc::new(queue),
+                ))
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "No se pudo conectar a Redis — sin notificaciones");
+                Arc::new(IngestionPipeline::new(repo, event_store))
+            }
+        },
+        Err(_) => {
+            tracing::warn!("REDIS_URL no configurada — sin notificaciones (modo desarrollo)");
+            Arc::new(IngestionPipeline::new(repo, event_store))
+        }
+    };
     let http_client = client::CsirtClient::new(&api_base)?;
 
     tracing::info!(interval_secs = poll_secs, "CSIRT poller iniciado");

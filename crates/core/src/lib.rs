@@ -96,8 +96,14 @@ pub struct TrustScore {
 }
 
 impl TrustScore {
+    /// Umbral por encima del cual un indicador dispara notificación inmediata.
+    /// Constante única para que `is_actionable`, `crossed_actionable_threshold`
+    /// y cualquier futura regla compartan el mismo valor — un solo lugar para
+    /// cambiarlo si los datos reales demuestran que 0.8 no es el corte correcto.
+    pub const NOTIFY_THRESHOLD: f32 = 0.8;
+
     pub fn is_actionable(&self) -> bool {
-        self.value > 0.8
+        self.value > Self::NOTIFY_THRESHOLD
     }
 }
 
@@ -212,6 +218,54 @@ pub fn normalize_ioc_value(value: &str) -> String {
         val.pop();
     }
     val
+}
+
+// ---------------------------------------------------------------------
+// Notificación — umbral y payload
+// ---------------------------------------------------------------------
+
+/// Retorna `true` solo cuando un indicador **acaba de cruzar** el umbral de
+/// notificación por primera vez (edge-triggered, no level-triggered).
+///
+/// La distinción es crítica para no renotificar en cada corroboración adicional
+/// sobre un indicador ya confirmado:
+/// - `trust_before = None`    → indicador nuevo; si trust_after > umbral, notificar.
+/// - `trust_before = Some(v)` → notificar solo si `v ≤ umbral` y `trust_after > umbral`.
+/// - El empate exacto (`trust_before == 0.8`) cuenta como "abajo", porque el umbral
+///   es estricto (`> 0.8`), así que 0.8 no activaba notificación antes.
+///
+/// Esta función es pura y testeada — misma filosofía que `Ioc::merge`.
+pub fn crossed_actionable_threshold(trust_before: Option<f32>, trust_after: f32) -> bool {
+    let was_below = trust_before.map_or(true, |v| v <= TrustScore::NOTIFY_THRESHOLD);
+    trust_after > TrustScore::NOTIFY_THRESHOLD && was_below
+}
+
+/// Payload completo que se empuja a Redis Streams cuando un IoC cruza el umbral.
+///
+/// Lleva todo lo que el notifier necesita para actuar — sin que tenga que volver
+/// a consultar Postgres. Desacoplamiento deliberado: un fallo en Postgres después
+/// de este punto no bloquea la notificación (el mensaje ya está en la cola).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationEvent {
+    /// Valor normalizado del indicador (ej: "banco-falso.cl").
+    pub ioc_value: String,
+    /// Tipo del indicador — para que el mensaje diga "dominio" / "URL" / "IP".
+    pub indicator_type: IndicatorType,
+    /// Entidad suplantada, si se conoce (ej: "Banco Santander").
+    pub impersonates: Option<String>,
+    /// Score final después del merge.
+    pub trust_value: f32,
+    /// Fuente — para que el mensaje diga "confirmado por CSIRT" vs
+    /// "corroborado por N reportes comunitarios".
+    pub source: Source,
+}
+
+/// Contrato que debe implementar cualquier cola de notificaciones.
+/// Vive en `core` para que `ingestion` dependa de la abstracción,
+/// no de la implementación concreta (Redis).
+#[async_trait::async_trait]
+pub trait NotificationQueue: Send + Sync {
+    async fn enqueue(&self, event: &NotificationEvent) -> anyhow::Result<()>;
 }
 
 /// Convierte notación "defanged" de threat intel al valor real, para que los
@@ -336,5 +390,46 @@ mod refang_tests {
     #[test]
     fn trim_de_espacios() {
         assert_eq!(refang("  ejemplo[.]com  "), "ejemplo.com");
+    }
+}
+
+#[cfg(test)]
+mod threshold_tests {
+    use super::*;
+
+    // Caso 1: IoC nuevo del CSIRT — entra directo a 1.0, debe notificar.
+    #[test]
+    fn ioc_nuevo_oficial_notifica() {
+        assert!(crossed_actionable_threshold(None, 1.0));
+    }
+
+    // Caso 2: corroboración comunitaria que cruza el umbral — debe notificar.
+    #[test]
+    fn comunidad_cruza_umbral_notifica() {
+        assert!(crossed_actionable_threshold(Some(0.5), 0.85));
+    }
+
+    // Caso 3: ya estaba sobre el umbral — corroboración adicional NO notifica.
+    #[test]
+    fn ya_confirmado_no_renotifica() {
+        assert!(!crossed_actionable_threshold(Some(0.82), 0.95));
+    }
+
+    // Caso 4: empate exacto en el umbral antes (0.8 ≤ 0.8 → was_below=true) — notifica.
+    #[test]
+    fn empate_exacto_en_umbral_cuenta_como_abajo() {
+        assert!(crossed_actionable_threshold(Some(0.8), 0.81));
+    }
+
+    // Caso 5: indicador nuevo pero no llega al umbral — no notifica.
+    #[test]
+    fn ioc_nuevo_bajo_umbral_no_notifica() {
+        assert!(!crossed_actionable_threshold(None, 0.7));
+    }
+
+    // Caso 6: sin cambio real sobre un indicador ya confirmado — no notifica.
+    #[test]
+    fn sin_cambio_ya_confirmado_no_notifica() {
+        assert!(!crossed_actionable_threshold(Some(0.9), 0.9));
     }
 }

@@ -11,7 +11,11 @@ use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
 use std::{net::SocketAddr, sync::Arc};
 use ingestion::IngestionPipeline;
-use storage::{clickhouse::ClickHouseIocEventStore, postgres::PgIocRepository};
+use storage::{
+    clickhouse::ClickHouseIocEventStore,
+    postgres::PgIocRepository,
+    redis_streams::RedisNotificationQueue,
+};
 use trampantojo_core::{IndicatorType, Ioc, IocStatus, Source, TrustScore};
 
 // ---------------------------------------------------------------------------
@@ -169,9 +173,36 @@ async fn main() -> anyhow::Result<()> {
         .connect(&database_url)
         .await?;
 
-    let repo = PgIocRepository::new(pool);
+    let repo        = PgIocRepository::new(pool);
     let event_store = ClickHouseIocEventStore::new(&clickhouse_url);
-    let pipeline = Arc::new(IngestionPipeline::new(repo, event_store));
+
+    // Cola de notificaciones — opcional en desarrollo (sin Redis), requerida en producción.
+    // Si REDIS_URL no está seteada se arranca sin cola y se loguea un aviso.
+    let pipeline = match std::env::var("REDIS_URL") {
+        Ok(redis_url) => {
+            match RedisNotificationQueue::new(&redis_url).await {
+                Ok(queue) => {
+                    tracing::info!("Cola de notificaciones Redis Streams conectada");
+                    Arc::new(IngestionPipeline::with_notification_queue(
+                        repo,
+                        event_store,
+                        Arc::new(queue),
+                    ))
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "No se pudo conectar a Redis — pipeline sin notificaciones (revisar REDIS_URL)"
+                    );
+                    Arc::new(IngestionPipeline::new(repo, event_store))
+                }
+            }
+        }
+        Err(_) => {
+            tracing::warn!("REDIS_URL no configurada — pipeline sin notificaciones (modo desarrollo)");
+            Arc::new(IngestionPipeline::new(repo, event_store))
+        }
+    };
 
     let trusted_proxies_str = std::env::var("TRUSTED_PROXIES")
         .unwrap_or_else(|_| "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16".to_string());
