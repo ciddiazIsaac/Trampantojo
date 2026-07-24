@@ -10,8 +10,9 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
 use std::{net::SocketAddr, sync::Arc};
+use ingestion::IngestionPipeline;
 use storage::{clickhouse::ClickHouseIocEventStore, postgres::PgIocRepository};
-use trampantojo_core::{IndicatorType, Ioc, IocEventStore, IocRepository, IocStatus, Source, TrustScore};
+use trampantojo_core::{IndicatorType, Ioc, IocStatus, Source, TrustScore};
 
 // ---------------------------------------------------------------------------
 // Tipos de entrada de la API pública
@@ -43,55 +44,6 @@ impl From<IndicatorTypeInput> for IndicatorType {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Ingestion Pipeline
-//
-// Orquesta la ingesta de indicadores. Implementa una asimetría deliberada:
-// - Postgres es crítico. Si falla, el pipeline aborta (fail-closed).
-// - ClickHouse es analítico. Si falla, se loguea y el pipeline sigue (fail-open).
-// ---------------------------------------------------------------------------
-pub struct IngestionPipeline {
-    repo: PgIocRepository,
-    event_store: ClickHouseIocEventStore,
-}
-
-impl IngestionPipeline {
-    pub fn new(repo: PgIocRepository, event_store: ClickHouseIocEventStore) -> Self {
-        Self { repo, event_store }
-    }
-
-    /// Ingiere un nuevo reporte (o actualización) de un indicador.
-    pub async fn ingest(&self, incoming: Ioc, deduplication_id: Option<&str>) -> anyhow::Result<()> {
-        // 1. Persistencia transaccional en Postgres.
-        // Captura el estado `trust_before` bajo el lock FOR UPDATE
-        // para evitar condiciones de carrera (TOCTOU) antes de fusionar.
-        // Además, si deduplication_id está presente, se inserta en community_reports.
-        let outcome = self.repo.upsert(&incoming, deduplication_id).await?;
-
-        // Si fue descartado por el filtro de deduplicación, no hubo merge,
-        // por lo tanto no registramos evento en ClickHouse.
-        if !outcome.was_merged {
-            return Ok(());
-        }
-
-        // 2. Registro del evento en ClickHouse (auditoría / analítica).
-        // Si ClickHouse falla, logueamos el error pero NO abortamos la operación.
-        // Es preferible perder un evento analítico que rechazar una alerta de seguridad real.
-        if let Err(e) = self
-            .event_store
-            .record_scoring_event(&outcome.ioc, outcome.trust_before)
-            .await
-        {
-            tracing::error!(
-                error = %e,
-                ioc_value = %outcome.ioc.value,
-                "Fallo al registrar evento en ClickHouse (fail-open activado: la ingesta continúa)"
-            );
-        }
-
-        Ok(())
-    }
-}
 
 // ---------------------------------------------------------------------------
 // HTTP Intake (Reportes comunitarios)
@@ -127,13 +79,43 @@ async fn report_indicator(
         .iter()
         .any(|net| net.contains(&addr.ip()));
 
-    // Identidad liviana: proxy-aware IP solo si viene de proxy confiable
+    // Identidad liviana: proxy-aware IP solo si viene de proxy confiable.
+    //
+    // X-Forwarded-For puede ser una lista: cliente, proxy1, proxy2, ...
+    // El proxy de confianza agrega la IP del remitente al *final* sin tocar
+    // lo que ya venía, así que un atacante puede preescribir valores a la
+    // izquierda. La única IP confiable es la primera a la izquierda de
+    // la cadena de proxies conocidos, leída de derecha a izquierda.
     let ip_str = if is_trusted_proxy {
         headers
             .get("x-forwarded-for")
             .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.split(',').next())
-            .map(|s| s.trim().to_string())
+            .map(|s| {
+                // Caminar de derecha a izquierda, saltando IPs de proxies
+                // de confianza, y quedarse con la primera que no lo sea.
+                let mut candidate: Option<std::net::IpAddr> = None;
+                for part in s.split(',').rev() {
+                    let trimmed = part.trim();
+                    match trimmed.parse::<std::net::IpAddr>() {
+                        Ok(ip) if state.trusted_proxies.iter().any(|net| net.contains(&ip)) => {
+                            // Es un proxy conocido — seguir hacia la izquierda.
+                            continue;
+                        }
+                        Ok(ip) => {
+                            // Primera IP que no es proxy de confianza → cliente real.
+                            candidate = Some(ip);
+                            break;
+                        }
+                        Err(_) => {
+                            // Token no parseable; detener el recorrido.
+                            break;
+                        }
+                    }
+                }
+                candidate
+                    .map(|ip| ip.to_string())
+                    .unwrap_or_else(|| addr.ip().to_string())
+            })
             .unwrap_or_else(|| addr.ip().to_string())
     } else {
         addr.ip().to_string()

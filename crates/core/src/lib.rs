@@ -214,6 +214,31 @@ pub fn normalize_ioc_value(value: &str) -> String {
     val
 }
 
+/// Convierte notación "defanged" de threat intel al valor real, para que los
+/// IoC publicados por el CSIRT (y otras fuentes) puedan compararse y
+/// almacenarse en formato canónico antes de pasar por `normalize_ioc_value`.
+///
+/// Convenciones soportadas:
+/// - `[.]`  → `.`  (el más común — evita que parsers de correo/web resuelvan el dominio)
+/// - `[:]`  → `:`  (usado en puertos y esquemas)
+/// - `hxxp://`  → `http://`
+/// - `hxxps://` → `https://`
+///
+/// El orden importa: primero se reemplazan esquemas enteros, luego caracteres
+/// individuales, para no producir cadenas intermedias incoherentes.
+pub fn refang(value: &str) -> String {
+    let mut s = value.trim().to_string();
+    // Esquemas defangeados (case-insensitive en la práctica, pero el CSIRT
+    // los publica en minúsculas — aplicamos el reemplazo sobre la copia original).
+    s = s.replace("hxxps://", "https://");
+    s = s.replace("hxxp://",  "http://");
+    // Caracteres individuales entre corchetes
+    s = s.replace("[.]", ".");
+    s = s.replace("[:]", ":");
+    s
+}
+
+
 #[cfg(test)]
 mod merge_tests {
     use super::*;
@@ -261,5 +286,55 @@ mod merge_tests {
             panic!("se esperaba Source::Community");
         }
         assert!(merged.trust_score.value < 0.8, "no debe cruzar el umbral de auto-notificación");
+    }
+}
+
+#[cfg(test)]
+mod refang_tests {
+    use super::*;
+
+    #[test]
+    fn punto_entre_corchetes() {
+        assert_eq!(refang("ejemplo[.]com"), "ejemplo.com");
+    }
+
+    #[test]
+    fn multiples_puntos_defangeados() {
+        assert_eq!(refang("sub[.]ejemplo[.]com"), "sub.ejemplo.com");
+    }
+
+    #[test]
+    fn esquema_hxxps() {
+        assert_eq!(refang("hxxps://ejemplo.com/login"), "https://ejemplo.com/login");
+    }
+
+    #[test]
+    fn esquema_hxxp() {
+        assert_eq!(refang("hxxp://ejemplo[.]com"), "http://ejemplo.com");
+    }
+
+    #[test]
+    fn combinado_esquema_y_dominio() {
+        // Caso típico del CSIRT: hxxps://dominio[.]com/path
+        assert_eq!(
+            refang("hxxps://banco-falso[.]cl/login"),
+            "https://banco-falso.cl/login"
+        );
+    }
+
+    #[test]
+    fn dos_puntos_defangeados() {
+        assert_eq!(refang("192[.]168[.]1[.]1[:]8080"), "192.168.1.1:8080");
+    }
+
+    #[test]
+    fn valor_limpio_no_se_altera() {
+        assert_eq!(refang("ejemplo.com"), "ejemplo.com");
+        assert_eq!(refang("https://ejemplo.com"), "https://ejemplo.com");
+    }
+
+    #[test]
+    fn trim_de_espacios() {
+        assert_eq!(refang("  ejemplo[.]com  "), "ejemplo.com");
     }
 }
