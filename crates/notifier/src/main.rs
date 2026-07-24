@@ -44,7 +44,10 @@ async fn main() -> Result<()> {
         }
     }
 
-    let http_client = reqwest::Client::new();
+    let http_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .context("Failed to build HTTP client")?;
     let webhook_url = env::var("WEBHOOK_URL").expect("WEBHOOK_URL debe estar configurada (MVP fijo)");
 
     // Tarea separada o loop intercalado. Lo haremos intercalado para simplicidad del MVP.
