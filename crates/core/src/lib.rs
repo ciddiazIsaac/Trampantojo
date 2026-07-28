@@ -144,6 +144,30 @@ pub trait IocEventStore: Send + Sync {
 }
 
 // ---------------------------------------------------------------------
+// Auth & API Keys
+// ---------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiKeyInfo {
+    pub key_hash: String,
+    pub org_id: Uuid,
+    pub plan: String,
+    pub is_active: bool,
+}
+
+pub fn hash_api_key(key: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(key.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+#[async_trait::async_trait]
+pub trait ApiKeyRepository: Send + Sync {
+    async fn find_by_hash(&self, hash: &str) -> anyhow::Result<Option<ApiKeyInfo>>;
+}
+
+// ---------------------------------------------------------------------
 // Merge Logic — reglas de negocio de scoring
 // ---------------------------------------------------------------------
 

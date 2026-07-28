@@ -1,12 +1,17 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{FromRow, PgPool};
-use trampantojo_core::{Ioc, IocRepository, IocStatus, IndicatorType, Source, TrustScore, MergeOutcome};
+use trampantojo_core::{Ioc, IocRepository, IocStatus, IndicatorType, Source, TrustScore, MergeOutcome, ApiKeyInfo, ApiKeyRepository};
 use uuid::Uuid;
 
+// PgPool es barato de clonar — comparte internamente un Arc sobre el pool real.
+// Derivar Clone aquí permite repartir el mismo repositorio entre el pipeline
+// y el trait ApiKeyRepository sin abrir dos pools de conexiones distintos.
+#[derive(Clone)]
 pub struct PgIocRepository {
     pool: PgPool,
 }
+
 
 impl PgIocRepository {
     pub fn new(pool: PgPool) -> Self {
@@ -221,5 +226,31 @@ impl IocRepository for PgIocRepository {
             trust_before,
             was_merged: true,
         })
+    }
+}
+
+#[async_trait::async_trait]
+impl ApiKeyRepository for PgIocRepository {
+    async fn find_by_hash(&self, hash: &str) -> anyhow::Result<Option<ApiKeyInfo>> {
+        let rec = sqlx::query(
+            r#"
+            SELECT key_hash, org_id, plan, is_active
+            FROM api_keys
+            WHERE key_hash = $1
+            "#
+        )
+        .bind(hash)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(rec.map(|r| {
+            use sqlx::Row;
+            ApiKeyInfo {
+                key_hash: r.get("key_hash"),
+                org_id: r.get("org_id"),
+                plan: r.get("plan"),
+                is_active: r.get("is_active"),
+            }
+        }))
     }
 }

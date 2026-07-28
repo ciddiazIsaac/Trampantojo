@@ -3,14 +3,22 @@ use axum::{
     extract::{FromRequestParts, Query, State},
     http::{request::Parts, StatusCode},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
-use storage::postgres::PgIocRepository;
+use storage::{
+    clickhouse::ClickHouseIocEventStore,
+    postgres::PgIocRepository,
+    redis_streams::RedisNotificationQueue,
+};
 use trampantojo_core::IocRepository;
+use ingestion::IngestionPipeline;
+
+mod middleware;
+mod routes;
 
 // ---------------------------------------------------------------------------
 // Tipo de error unificado
@@ -22,10 +30,16 @@ use trampantojo_core::IocRepository;
 // de contrato, no un detalle cosmético.
 // ---------------------------------------------------------------------------
 
-enum ApiError {
+pub enum ApiError {
     /// El request está malformado (parámetro faltante, valor inválido, etc.).
     /// El mensaje llega al cliente — debe ser genérico pero accionable.
     BadRequest(String),
+
+    /// API Key inválida o inactiva.
+    Unauthorized(String),
+
+    /// Rate limit excedido.
+    TooManyRequests,
 
     /// Falla de infraestructura (DB caída, timeout de pool, etc.).
     /// El detalle real va a los logs vía tracing; al cliente solo le llega
@@ -38,15 +52,17 @@ enum ApiError {
 /// estructurados (para i18n o para que el cliente tome decisiones), este es
 /// el único lugar que cambiás.
 #[derive(Serialize)]
-struct ErrorBody {
-    error: String,
+pub struct ErrorBody {
+    pub error: String,
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
-            ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
-            ApiError::Internal => (
+            ApiError::BadRequest(msg)     => (StatusCode::BAD_REQUEST, msg),
+            ApiError::Unauthorized(msg)   => (StatusCode::UNAUTHORIZED, msg),
+            ApiError::TooManyRequests     => (StatusCode::TOO_MANY_REQUESTS, "demasiadas peticiones".to_string()),
+            ApiError::Internal            => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "error interno, inténtalo de nuevo".to_string(),
             ),
@@ -93,13 +109,25 @@ where
 // Estado compartido de la aplicación
 // ---------------------------------------------------------------------------
 
+use trampantojo_core::ApiKeyRepository;
+
 #[derive(Clone)]
-struct AppState {
-    repo: Arc<dyn IocRepository>,
+pub struct AppState {
+    pub repo: Arc<dyn IocRepository>,
+    pub api_keys: Arc<dyn ApiKeyRepository>,
+    pub rate_limiter: Arc<storage::rate_limit::RedisRateLimiter>,
+    pub pipeline: Arc<IngestionPipeline>,
+    /// CIDRs que el API puede confiar para leer X-Forwarded-For.
+    /// Leídos de TRUSTED_PROXIES en el arranque; inmutables en runtime.
+    pub trusted_proxies: Vec<ipnet::IpNet>,
+    /// Pool directo de Postgres para /healthz (SELECT 1).
+    /// Separado del trait IocRepository para no contaminar el contrato
+    /// de dominio con una operación puramente operacional.
+    pub pg_pool: Arc<sqlx::PgPool>,
 }
 
 // ---------------------------------------------------------------------------
-// Tipos de request / response
+// Tipos de request / response de /v1/check
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
@@ -116,18 +144,14 @@ struct CheckResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Handler
+// Handler de /v1/check
 //
-// Firma: Result<Json<CheckResponse>, ApiError>
-// Ambos caminos de falla (parámetro inválido y DB caída) salen ahora por el
-// mismo tipo — el cliente recibe exactamente el mismo formato JSON en los dos
-// casos, solo con distinto status HTTP y mensaje.
+// El endpoint que justifica todo lo demás: esto es lo que va a llamar
+// una fintech en su checkout, o el bot de WhatsApp cuando alguien pega
+// un link sospechoso. Todo lo demás del sistema existe para que esta
+// respuesta sea rápida y confiable.
 // ---------------------------------------------------------------------------
 
-/// El endpoint que justifica todo lo demás: esto es lo que va a llamar
-/// una fintech en su checkout, o el bot de WhatsApp cuando alguien pega
-/// un link sospechoso. Todo lo demás del sistema existe para que esta
-/// respuesta sea rápida y confiable.
 async fn check_indicator(
     State(state): State<AppState>,
     ValidatedQuery(params): ValidatedQuery<CheckParams>,
@@ -147,10 +171,6 @@ async fn check_indicator(
             ApiError::Internal
         })?;
 
-    // `other` en vez de `_` para evitar que el borrow checker se queje:
-    // con `_` el valor se mueve en el primer arm y no podemos usarlo en el
-    // segundo. Con un binding nombrado, el compilador entiende que solo uno
-    // de los dos brazos se ejecuta.
     Ok(match found {
         Some(ioc) if ioc.trust_score.is_actionable() => Json(CheckResponse {
             value: normalized,
@@ -168,38 +188,117 @@ async fn check_indicator(
 }
 
 // ---------------------------------------------------------------------------
+// Handler de /healthz
+//
+// Usa SELECT 1 directo sobre el pool en lugar de find_by_value, que
+// genera ruido en los logs de Postgres con cada probe de liveness/readiness
+// de k8s (puede ser cientos por minuto). sqlx::query("SELECT 1") es la
+// forma idiomática de verificar conectividad sin efectos secundarios.
+// ---------------------------------------------------------------------------
+
+async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
+    // Extraemos el pool del repo concreto para poder hacer un ping directo.
+    // Si el pool no puede adquirir conexión en el timeout configurado, falla.
+    match sqlx::query("SELECT 1")
+        .execute(state.pg_pool.as_ref())
+        .await
+    {
+        Ok(_)  => (StatusCode::OK, "OK"),
+        Err(_) => (StatusCode::SERVICE_UNAVAILABLE, "Unavailable"),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Punto de entrada
 // ---------------------------------------------------------------------------
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
     tracing_subscriber::fmt::init();
 
     let database_url = std::env::var("DATABASE_URL")
-        .expect("DATABASE_URL debe estar seteado (ver docker-compose.yml)");
+        .expect("DATABASE_URL debe estar seteado (ver .env)");
+    let clickhouse_url = std::env::var("CLICKHOUSE_URL")
+        .unwrap_or_else(|_| "http://localhost:8123".to_string());
+    let redis_url = std::env::var("REDIS_URL")
+        .unwrap_or_else(|_| "redis://127.0.0.1:6379".into());
 
-    // acquire_timeout en 2 s: si Postgres tarda más en darnos una conexión
-    // del pool, ya algo está muy mal — no tiene sentido hacer esperar al
-    // cliente 30 s (el default de sqlx) para confirmar lo que ya sabíamos
-    // al segundo dos. Si ves timeouts falsos-positivos bajo carga legítima
-    // (no caída, solo tráfico alto), este es el primer número que ajustás.
     let pool = PgPoolOptions::new()
         .max_connections(10)
         .acquire_timeout(std::time::Duration::from_secs(2))
         .connect(&database_url)
         .await?;
 
-    let state = AppState {
-        repo: Arc::new(PgIocRepository::new(pool)),
+    let redis_client = redis::Client::open(redis_url.clone())?;
+    let redis_conn = redis::aio::ConnectionManager::new(redis_client).await?;
+
+    let repo     = PgIocRepository::new(pool.clone());
+    let repo_arc = Arc::new(repo.clone());
+
+    let event_store = ClickHouseIocEventStore::new(&clickhouse_url);
+
+    // Construir el pipeline con cola de notificaciones opcional.
+    // Misma lógica de arranque que tenía ingestion/main.rs — fail-open
+    // si Redis no está disponible: se loguea un warning y el pipeline
+    // funciona sin notificaciones hasta que Redis vuelva.
+    let pipeline = match RedisNotificationQueue::new(&redis_url).await {
+        Ok(queue) => {
+            tracing::info!("cola de notificaciones Redis Streams conectada");
+            Arc::new(IngestionPipeline::with_notification_queue(
+                repo,
+                event_store,
+                Arc::new(queue),
+            ))
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "no se pudo conectar a Redis para notificaciones \
+                 (pipeline arranca sin cola — revisar REDIS_URL)"
+            );
+            Arc::new(IngestionPipeline::new(repo, event_store))
+        }
     };
 
-    let app = Router::new()
+    let trusted_proxies_str = std::env::var("TRUSTED_PROXIES")
+        .unwrap_or_else(|_| "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16".to_string());
+    let trusted_proxies: Vec<ipnet::IpNet> = trusted_proxies_str
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+
+    let state = AppState {
+        repo: repo_arc.clone(),
+        api_keys: repo_arc,
+        rate_limiter: Arc::new(storage::rate_limit::RedisRateLimiter::new(redis_conn)),
+        pipeline,
+        trusted_proxies,
+        pg_pool: Arc::new(pool),
+    };
+
+    // api_routes agrupa todas las rutas que requieren auth + rate limiting.
+    // El route_layer se aplica una sola vez y cubre /v1/check y /v1/report.
+    let api_routes = Router::new()
         .route("/v1/check", get(check_indicator))
+        .route("/v1/report", post(routes::report::report_indicator))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::rate_limit_middleware,
+        ));
+
+    let app = Router::new()
+        .route("/healthz", get(healthz))
+        .merge(api_routes)
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
     tracing::info!("api escuchando en :8080");
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }
