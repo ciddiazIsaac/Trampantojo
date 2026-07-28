@@ -2,7 +2,6 @@ use axum::{
     extract::{ConnectInfo, State},
     http::HeaderMap,
     response::IntoResponse,
-    Json,
 };
 use chrono::Utc;
 use serde::Deserialize;
@@ -10,7 +9,7 @@ use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
 use trampantojo_core::{IndicatorType, Ioc, IocStatus, Source, TrustScore};
 
-use crate::{ApiError, AppState};
+use crate::{ApiError, AppState, ValidatedJson};
 
 // ---------------------------------------------------------------------------
 // Conversión del tipo de indicador para la API pública
@@ -68,7 +67,7 @@ pub async fn report_indicator(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
-    Json(params): Json<ReportParams>,
+    ValidatedJson(params): ValidatedJson<ReportParams>,
 ) -> Result<impl IntoResponse, ApiError> {
     let normalized = trampantojo_core::normalize_ioc_value(&params.value);
 

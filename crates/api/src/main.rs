@@ -105,6 +105,29 @@ where
     }
 }
 
+pub struct ValidatedJson<T>(pub T);
+
+#[async_trait]
+impl<S, T> axum::extract::FromRequest<S> for ValidatedJson<T>
+where
+    T: for<'de> Deserialize<'de> + Send,
+    S: Send + Sync,
+    Json<T>: axum::extract::FromRequest<S, Rejection = axum::extract::rejection::JsonRejection>,
+{
+    type Rejection = ApiError;
+
+    async fn from_request(req: axum::extract::Request, state: &S) -> Result<Self, Self::Rejection> {
+        match Json::<T>::from_request(req, state).await {
+            Ok(Json(value)) => Ok(ValidatedJson(value)),
+            Err(rejection) => {
+                // Axum provee un rechazo con mensaje decente (ej: "missing field `value`"), 
+                // lo mapeamos a nuestro contrato unificado.
+                Err(ApiError::BadRequest(rejection.body_text()))
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Estado compartido de la aplicación
 // ---------------------------------------------------------------------------
