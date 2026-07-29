@@ -143,6 +143,22 @@ pub trait IocEventStore: Send + Sync {
     async fn record_verification_query(&self, value: &str, matched: bool) -> anyhow::Result<()>;
 }
 
+#[async_trait::async_trait]
+pub trait IocStatsStore: Send + Sync {
+    /// Obtiene las estadísticas agregadas diarias de los últimos N días.
+    /// Esto es exclusivo para alimentar el dashboard frontend.
+    async fn get_daily_stats(&self, days: u32) -> anyhow::Result<Vec<DailyStat>>;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DailyStat {
+    pub day: String, // "YYYY-MM-DD"
+    pub impersonates: String,
+    pub ioc_type: String,
+    pub events: u64,
+    pub actionable: u64,
+}
+
 // ---------------------------------------------------------------------
 // Auth & API Keys
 // ---------------------------------------------------------------------

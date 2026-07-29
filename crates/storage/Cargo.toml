@@ -6,7 +6,8 @@ edition = "2021"
 [dependencies]
 trampantojo-core = { path = "../core" }
 sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-rustls", "uuid", "chrono"] }
-clickhouse = { version = "0.15", features = ["uuid"] }
+clickhouse = { version = "0.15", features = ["uuid", "time"] }
+time = "0.3"
 async-trait = "0.1"
 anyhow = "1"
 uuid = { version = "1", features = ["v4"] }

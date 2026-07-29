@@ -73,6 +73,7 @@ fn indicator_type_str(t: &trampantojo_core::IndicatorType) -> &'static str {
 // Implementación del store
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 pub struct ClickHouseIocEventStore {
     client: clickhouse::Client,
 }
@@ -131,5 +132,53 @@ impl IocEventStore for ClickHouseIocEventStore {
         // patrón de acceso que los eventos de scoring: alta cardinalidad en
         // `value`, sin impersonates, sin trust_score).
         Ok(())
+    }
+}
+
+#[derive(Row, serde::Deserialize)]
+struct DailyStatRow {
+    #[serde(with = "clickhouse::serde::time::date")]
+    day: time::Date,
+    impersonates: String,
+    ioc_type: String,
+    events: u64,
+    actionable: u64,
+}
+
+#[async_trait]
+impl trampantojo_core::IocStatsStore for ClickHouseIocEventStore {
+    async fn get_daily_stats(&self, days: u32) -> anyhow::Result<Vec<trampantojo_core::DailyStat>> {
+        // Obtenemos los datos agregados desde la vista/tabla materializada.
+        // Hacemos SUM() porque SummingMergeTree no garantiza que las filas con 
+        // misma clave estén ya consolidadas en el disco.
+        let query = format!(
+            "SELECT 
+                day, 
+                impersonates, 
+                ioc_type, 
+                sum(event_count) as events, 
+                sum(actionable_count) as actionable 
+             FROM ioc_events_daily 
+             WHERE day >= today() - {} 
+             GROUP BY day, impersonates, ioc_type 
+             ORDER BY day DESC",
+            days
+        );
+
+        let mut cursor = self.client.query(&query).fetch::<DailyStatRow>()?;
+        let mut results = Vec::new();
+
+        while let Some(row) = cursor.next().await? {
+            let day_str = row.day.to_string();
+            results.push(trampantojo_core::DailyStat {
+                day: day_str,
+                impersonates: row.impersonates,
+                ioc_type: row.ioc_type,
+                events: row.events,
+                actionable: row.actionable,
+            });
+        }
+
+        Ok(results)
     }
 }

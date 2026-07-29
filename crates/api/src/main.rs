@@ -140,6 +140,7 @@ pub struct AppState {
     pub api_keys: Arc<dyn ApiKeyRepository>,
     pub rate_limiter: Arc<storage::rate_limit::RedisRateLimiter>,
     pub pipeline: Arc<IngestionPipeline>,
+    pub stats_store: Arc<dyn trampantojo_core::IocStatsStore>,
     /// CIDRs que el API puede confiar para leer X-Forwarded-For.
     /// Leídos de TRUSTED_PROXIES en el arranque; inmutables en runtime.
     pub trusted_proxies: Vec<ipnet::IpNet>,
@@ -270,7 +271,7 @@ async fn main() -> anyhow::Result<()> {
             tracing::info!("cola de notificaciones Redis Streams conectada");
             Arc::new(IngestionPipeline::with_notification_queue(
                 repo,
-                event_store,
+                event_store.clone(),
                 Arc::new(queue),
             ))
         }
@@ -280,7 +281,7 @@ async fn main() -> anyhow::Result<()> {
                 "no se pudo conectar a Redis para notificaciones \
                  (pipeline arranca sin cola — revisar REDIS_URL)"
             );
-            Arc::new(IngestionPipeline::new(repo, event_store))
+            Arc::new(IngestionPipeline::new(repo, event_store.clone()))
         }
     };
 
@@ -296,6 +297,7 @@ async fn main() -> anyhow::Result<()> {
         api_keys: repo_arc,
         rate_limiter: Arc::new(storage::rate_limit::RedisRateLimiter::new(redis_conn)),
         pipeline,
+        stats_store: Arc::new(event_store),
         trusted_proxies,
         pg_pool: Arc::new(pool),
     };
@@ -305,6 +307,7 @@ async fn main() -> anyhow::Result<()> {
     let api_routes = Router::new()
         .route("/v1/check", get(check_indicator))
         .route("/v1/report", post(routes::report::report_indicator))
+        .route("/v1/stats", get(routes::stats::get_stats))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             middleware::rate_limit_middleware,
