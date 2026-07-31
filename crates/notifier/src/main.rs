@@ -37,11 +37,11 @@ async fn main() -> Result<()> {
         .query_async(&mut con)
         .await;
 
-    if let Err(e) = group_created {
-        if !e.to_string().contains("BUSYGROUP") {
-            error!("Error creando XGROUP: {:?}", e);
-            return Err(e.into());
-        }
+    if let Err(e) = group_created
+        && !e.to_string().contains("BUSYGROUP")
+    {
+        error!("Error creando XGROUP: {:?}", e);
+        return Err(e.into());
     }
 
     let http_client = reqwest::Client::builder()

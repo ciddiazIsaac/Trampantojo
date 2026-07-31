@@ -284,7 +284,7 @@ pub fn normalize_ioc_value(value: &str) -> String {
 ///
 /// Esta función es pura y testeada — misma filosofía que `Ioc::merge`.
 pub fn crossed_actionable_threshold(trust_before: Option<f32>, trust_after: f32) -> bool {
-    let was_below = trust_before.map_or(true, |v| v <= TrustScore::NOTIFY_THRESHOLD);
+    let was_below = trust_before.is_none_or(|v| v <= TrustScore::NOTIFY_THRESHOLD);
     trust_after > TrustScore::NOTIFY_THRESHOLD && was_below
 }
 
