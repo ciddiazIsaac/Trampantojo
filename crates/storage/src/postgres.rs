@@ -1,7 +1,10 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{FromRow, PgPool};
-use trampantojo_core::{Ioc, IocRepository, IocStatus, IndicatorType, Source, TrustScore, MergeOutcome, ApiKeyInfo, ApiKeyRepository};
+use trampantojo_core::{
+    ApiKeyInfo, ApiKeyRepository, IndicatorType, Ioc, IocRepository, IocStatus, MergeOutcome,
+    Source, TrustScore,
+};
 use uuid::Uuid;
 
 // PgPool es barato de clonar — comparte internamente un Arc sobre el pool real.
@@ -11,7 +14,6 @@ use uuid::Uuid;
 pub struct PgIocRepository {
     pool: PgPool,
 }
-
 
 impl PgIocRepository {
     pub fn new(pool: PgPool) -> Self {
@@ -75,7 +77,10 @@ impl TryFrom<IocRow> for Ioc {
             source,
             // Los `factors` detallados no viven en Postgres (ver docs/data-model.md) —
             // al reconstruir desde esta tabla solo tenemos el valor operativo.
-            trust_score: TrustScore { value: row.trust_value, factors: vec![] },
+            trust_score: TrustScore {
+                value: row.trust_value,
+                factors: vec![],
+            },
             status,
             impersonates: row.impersonates,
             first_seen: row.first_seen,
@@ -127,7 +132,11 @@ impl IocRepository for PgIocRepository {
     /// + un solo write. La transacción evita que dos ingestas concurrentes
     /// se pisen la corroboración una a la otra, y además asegura que
     /// el check de deduplicación sea atómico.
-    async fn upsert(&self, incoming: &Ioc, deduplication_id: Option<&str>) -> anyhow::Result<MergeOutcome> {
+    async fn upsert(
+        &self,
+        incoming: &Ioc,
+        deduplication_id: Option<&str>,
+    ) -> anyhow::Result<MergeOutcome> {
         let mut tx = self.pool.begin().await?;
 
         let existing_row: Option<IocRow> = sqlx::query_as(&format!(
@@ -138,15 +147,17 @@ impl IocRepository for PgIocRepository {
         .await?;
 
         let existing = existing_row.map(Ioc::try_from).transpose()?;
-        
+
         // Pre-check deduplicación: si ya existe la combinación (reporter_hash, indicador),
         // sabemos antes del merge que este reporte es duplicado y podemos salir temprano.
         // La lectura es bajo la misma transacción (bloqueo de fila en iocs ya activo),
         // así que es atómica respecto a cualquier otro upsert concurrente del mismo indicador.
-        if let (Some(reporter_hash), Source::Community { .. }) = (deduplication_id, &incoming.source) {
+        if let (Some(reporter_hash), Source::Community { .. }) =
+            (deduplication_id, &incoming.source)
+        {
             let already_reported: Option<(i32,)> = sqlx::query_as(
                 "SELECT 1 FROM community_reports
-                 WHERE indicator_type = $1::indicator_type AND value = $2 AND reporter_hash = $3"
+                 WHERE indicator_type = $1::indicator_type AND value = $2 AND reporter_hash = $3",
             )
             .bind(indicator_type_to_db(&incoming.indicator_type))
             .bind(&incoming.value)
@@ -167,11 +178,15 @@ impl IocRepository for PgIocRepository {
         let trust_before = existing.as_ref().map(|e| e.trust_score.value);
         let merged = Ioc::merge(existing, incoming.clone());
 
-        let (source_kind, source_issuer, source_advisory_url, corroborations) = match &merged.source {
-            Source::Official { issuer, advisory_url } => {
-                ("official", Some(issuer.clone()), advisory_url.clone(), 0i32)
+        let (source_kind, source_issuer, source_advisory_url, corroborations) = match &merged.source
+        {
+            Source::Official {
+                issuer,
+                advisory_url,
+            } => ("official", Some(issuer.clone()), advisory_url.clone(), 0i32),
+            Source::Community { corroborations } => {
+                ("community", None, None, *corroborations as i32)
             }
-            Source::Community { corroborations } => ("community", None, None, *corroborations as i32),
         };
 
         sqlx::query(
@@ -207,11 +222,12 @@ impl IocRepository for PgIocRepository {
 
         // Ahora que iocs ya tiene la fila (FK satisfecha), insertamos el registro
         // de deduplicación para futuros reportes del mismo reportante.
-        if let (Some(reporter_hash), Source::Community { .. }) = (deduplication_id, &merged.source) {
+        if let (Some(reporter_hash), Source::Community { .. }) = (deduplication_id, &merged.source)
+        {
             sqlx::query(
                 "INSERT INTO community_reports (indicator_type, value, reporter_hash)
                  VALUES ($1::indicator_type, $2, $3)
-                 ON CONFLICT DO NOTHING"
+                 ON CONFLICT DO NOTHING",
             )
             .bind(indicator_type_to_db(&merged.indicator_type))
             .bind(&merged.value)
@@ -237,7 +253,7 @@ impl ApiKeyRepository for PgIocRepository {
             SELECT key_hash, org_id, plan, is_active
             FROM api_keys
             WHERE key_hash = $1
-            "#
+            "#,
         )
         .bind(hash)
         .fetch_optional(&self.pool)

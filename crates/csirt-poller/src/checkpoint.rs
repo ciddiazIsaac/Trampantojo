@@ -26,11 +26,10 @@ struct PollerStateRow {
 /// Lee el estado actual del poller. Si la fila no existe (debería haberla
 /// creado la migración), usa valores por defecto seguros.
 pub async fn load(pool: &PgPool) -> Result<PollerState> {
-    let row: Option<PollerStateRow> = sqlx::query_as(
-        "SELECT last_polled_at, seen_codes FROM csirt_poller_state WHERE id = 1",
-    )
-    .fetch_optional(pool)
-    .await?;
+    let row: Option<PollerStateRow> =
+        sqlx::query_as("SELECT last_polled_at, seen_codes FROM csirt_poller_state WHERE id = 1")
+            .fetch_optional(pool)
+            .await?;
 
     Ok(match row {
         Some(r) => PollerState {
@@ -78,4 +77,3 @@ pub async fn save(
 
     Ok(())
 }
-

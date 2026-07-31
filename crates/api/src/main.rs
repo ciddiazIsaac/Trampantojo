@@ -1,21 +1,20 @@
 use async_trait::async_trait;
 use axum::{
+    Json, Router,
     extract::{FromRequestParts, Query, State},
-    http::{request::Parts, StatusCode},
+    http::{StatusCode, request::Parts},
     response::{IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
 };
+use ingestion::IngestionPipeline;
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
 use std::sync::Arc;
 use storage::{
-    clickhouse::ClickHouseIocEventStore,
-    postgres::PgIocRepository,
+    clickhouse::ClickHouseIocEventStore, postgres::PgIocRepository,
     redis_streams::RedisNotificationQueue,
 };
 use trampantojo_core::IocRepository;
-use ingestion::IngestionPipeline;
 
 mod middleware;
 mod routes;
@@ -59,10 +58,13 @@ pub struct ErrorBody {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
-            ApiError::BadRequest(msg)     => (StatusCode::BAD_REQUEST, msg),
-            ApiError::Unauthorized(msg)   => (StatusCode::UNAUTHORIZED, msg),
-            ApiError::TooManyRequests     => (StatusCode::TOO_MANY_REQUESTS, "demasiadas peticiones".to_string()),
-            ApiError::Internal            => (
+            ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            ApiError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
+            ApiError::TooManyRequests => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "demasiadas peticiones".to_string(),
+            ),
+            ApiError::Internal => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "error interno, inténtalo de nuevo".to_string(),
             ),
@@ -120,7 +122,7 @@ where
         match Json::<T>::from_request(req, state).await {
             Ok(Json(value)) => Ok(ValidatedJson(value)),
             Err(rejection) => {
-                // Axum provee un rechazo con mensaje decente (ej: "missing field `value`"), 
+                // Axum provee un rechazo con mensaje decente (ej: "missing field `value`"),
                 // lo mapeamos a nuestro contrato unificado.
                 Err(ApiError::BadRequest(rejection.body_text()))
             }
@@ -184,16 +186,12 @@ async fn check_indicator(
     // testeable: lowercase, quitar protocolo, trim, etc. No se duplica aquí.
     let normalized = trampantojo_core::normalize_ioc_value(&params.value);
 
-    let found = state
-        .repo
-        .find_by_value(&normalized)
-        .await
-        .map_err(|e| {
-            // El detalle real (mensaje de sqlx, tipo de error) va a los logs.
-            // Al cliente solo llega ApiError::Internal con mensaje genérico.
-            tracing::error!(error = %e, "fallo al consultar iocs en postgres");
-            ApiError::Internal
-        })?;
+    let found = state.repo.find_by_value(&normalized).await.map_err(|e| {
+        // El detalle real (mensaje de sqlx, tipo de error) va a los logs.
+        // Al cliente solo llega ApiError::Internal con mensaje genérico.
+        tracing::error!(error = %e, "fallo al consultar iocs en postgres");
+        ApiError::Internal
+    })?;
 
     Ok(match found {
         Some(ioc) if ioc.trust_score.is_actionable() => Json(CheckResponse {
@@ -227,7 +225,7 @@ async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
         .execute(state.pg_pool.as_ref())
         .await
     {
-        Ok(_)  => (StatusCode::OK, "OK"),
+        Ok(_) => (StatusCode::OK, "OK"),
         Err(_) => (StatusCode::SERVICE_UNAVAILABLE, "Unavailable"),
     }
 }
@@ -241,12 +239,11 @@ async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
     tracing_subscriber::fmt::init();
 
-    let database_url = std::env::var("DATABASE_URL")
-        .expect("DATABASE_URL debe estar seteado (ver .env)");
-    let clickhouse_url = std::env::var("CLICKHOUSE_URL")
-        .unwrap_or_else(|_| "http://localhost:8123".to_string());
-    let redis_url = std::env::var("REDIS_URL")
-        .unwrap_or_else(|_| "redis://127.0.0.1:6379".into());
+    let database_url =
+        std::env::var("DATABASE_URL").expect("DATABASE_URL debe estar seteado (ver .env)");
+    let clickhouse_url =
+        std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://localhost:8123".to_string());
+    let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".into());
 
     let pool = PgPoolOptions::new()
         .max_connections(10)
@@ -257,7 +254,7 @@ async fn main() -> anyhow::Result<()> {
     let redis_client = redis::Client::open(redis_url.clone())?;
     let redis_conn = redis::aio::ConnectionManager::new(redis_client).await?;
 
-    let repo     = PgIocRepository::new(pool.clone());
+    let repo = PgIocRepository::new(pool.clone());
     let repo_arc = Arc::new(repo.clone());
 
     let event_store = ClickHouseIocEventStore::new(&clickhouse_url);
@@ -285,8 +282,9 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    let trusted_proxies_str = std::env::var("TRUSTED_PROXIES")
-        .unwrap_or_else(|_| "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16".to_string());
+    let trusted_proxies_str = std::env::var("TRUSTED_PROXIES").unwrap_or_else(|_| {
+        "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16".to_string()
+    });
     let trusted_proxies: Vec<ipnet::IpNet> = trusted_proxies_str
         .split(',')
         .filter_map(|s| s.trim().parse().ok())

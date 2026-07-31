@@ -2,8 +2,8 @@ use anyhow::Result;
 use std::sync::Arc;
 use storage::{clickhouse::ClickHouseIocEventStore, postgres::PgIocRepository};
 use trampantojo_core::{
-    crossed_actionable_threshold, Ioc, IocEventStore, IocRepository, NotificationEvent,
-    NotificationQueue,
+    Ioc, IocEventStore, IocRepository, NotificationEvent, NotificationQueue,
+    crossed_actionable_threshold,
 };
 
 // ---------------------------------------------------------------------------
@@ -25,7 +25,11 @@ pub struct IngestionPipeline {
 
 impl IngestionPipeline {
     pub fn new(repo: PgIocRepository, event_store: ClickHouseIocEventStore) -> Self {
-        Self { repo, event_store, notification_queue: None }
+        Self {
+            repo,
+            event_store,
+            notification_queue: None,
+        }
     }
 
     /// Versión con cola de notificaciones habilitada.
@@ -34,7 +38,11 @@ impl IngestionPipeline {
         event_store: ClickHouseIocEventStore,
         queue: Arc<dyn NotificationQueue>,
     ) -> Self {
-        Self { repo, event_store, notification_queue: Some(queue) }
+        Self {
+            repo,
+            event_store,
+            notification_queue: Some(queue),
+        }
     }
 
     /// Ingiere un nuevo reporte (o actualización) de un indicador.
@@ -54,11 +62,11 @@ impl IngestionPipeline {
             let trust_after = outcome.ioc.trust_score.value;
             if crossed_actionable_threshold(outcome.trust_before, trust_after) {
                 let event = NotificationEvent {
-                    ioc_value:      outcome.ioc.value.clone(),
+                    ioc_value: outcome.ioc.value.clone(),
                     indicator_type: outcome.ioc.indicator_type.clone(),
-                    impersonates:   outcome.ioc.impersonates.clone(),
-                    trust_value:    trust_after,
-                    source:         outcome.ioc.source.clone(),
+                    impersonates: outcome.ioc.impersonates.clone(),
+                    trust_value: trust_after,
+                    source: outcome.ioc.source.clone(),
                 };
                 // Fail-open con error! — más ruidoso que ClickHouse porque
                 // una notificación perdida tiene mayor costo operacional.

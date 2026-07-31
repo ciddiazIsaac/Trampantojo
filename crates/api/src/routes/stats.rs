@@ -1,8 +1,4 @@
-use axum::{
-    extract::State,
-    response::IntoResponse,
-    Json,
-};
+use axum::{Json, extract::State, response::IntoResponse};
 use serde::Deserialize;
 use std::cmp::min;
 
@@ -21,14 +17,10 @@ pub async fn get_stats(
     let days = params.days.unwrap_or(7);
     let days = min(days, 90);
 
-    let stats = state
-        .stats_store
-        .get_daily_stats(days)
-        .await
-        .map_err(|e| {
-            tracing::error!("Error consultando stats: {:?}", e);
-            ApiError::Internal
-        })?;
+    let stats = state.stats_store.get_daily_stats(days).await.map_err(|e| {
+        tracing::error!("Error consultando stats: {:?}", e);
+        ApiError::Internal
+    })?;
 
     Ok(Json(stats))
 }

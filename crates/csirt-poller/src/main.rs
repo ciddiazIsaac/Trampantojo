@@ -9,34 +9,33 @@
 //!   CSIRT_POLL_INTERVAL_SECS  (opcional, default: 3600)
 //!   CSIRT_API_BASE            (opcional, default: https://www.csirt.gob.cl)
 
+mod checkpoint;
 mod client;
 mod filter;
-mod checkpoint;
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use chrono::Utc;
 use ingestion::IngestionPipeline;
 use sqlx::postgres::PgPoolOptions;
 use storage::{
-    clickhouse::ClickHouseIocEventStore,
-    postgres::PgIocRepository,
+    clickhouse::ClickHouseIocEventStore, postgres::PgIocRepository,
     redis_streams::RedisNotificationQueue,
 };
 use trampantojo_core::{Ioc, IocStatus, ScoreFactor, Source, TrustScore};
-use chrono::Utc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
     tracing_subscriber::fmt::init();
 
-    let database_url  = std::env::var("DATABASE_URL").expect("DATABASE_URL debe estar seteado");
-    let clickhouse_url = std::env::var("CLICKHOUSE_URL")
-        .unwrap_or_else(|_| "http://localhost:8123".to_string());
-    let api_base = std::env::var("CSIRT_API_BASE")
-        .unwrap_or_else(|_| "https://www.csirt.gob.cl".to_string());
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL debe estar seteado");
+    let clickhouse_url =
+        std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://localhost:8123".to_string());
+    let api_base =
+        std::env::var("CSIRT_API_BASE").unwrap_or_else(|_| "https://www.csirt.gob.cl".to_string());
     let poll_secs: u64 = std::env::var("CSIRT_POLL_INTERVAL_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -47,14 +46,16 @@ async fn main() -> Result<()> {
         .connect(&database_url)
         .await?;
 
-    let repo        = PgIocRepository::new(pool.clone());
+    let repo = PgIocRepository::new(pool.clone());
     let event_store = ClickHouseIocEventStore::new(&clickhouse_url);
     let pipeline = match std::env::var("REDIS_URL") {
         Ok(redis_url) => match RedisNotificationQueue::new(&redis_url).await {
             Ok(queue) => {
                 tracing::info!("Cola de notificaciones Redis Streams conectada");
                 Arc::new(IngestionPipeline::with_notification_queue(
-                    repo, event_store, Arc::new(queue),
+                    repo,
+                    event_store,
+                    Arc::new(queue),
                 ))
             }
             Err(e) => {
@@ -114,11 +115,14 @@ async fn poll_cycle(
     let mut page = 1u32;
 
     loop {
-        let resp = http_client
-            .fetch_alerts(state.last_polled_at, page)
-            .await?;
+        let resp = http_client.fetch_alerts(state.last_polled_at, page).await?;
 
-        tracing::debug!(page, total = resp.count, items = resp.items.len(), "Página recibida");
+        tracing::debug!(
+            page,
+            total = resp.count,
+            items = resp.items.len(),
+            "Página recibida"
+        );
 
         for alert in &resp.items {
             let code = alert.code.clone();
@@ -164,9 +168,9 @@ async fn poll_cycle(
                 };
 
                 // Defang + normalizar
-                let clean_value = trampantojo_core::normalize_ioc_value(
-                    &trampantojo_core::refang(&raw_ioc.value)
-                );
+                let clean_value = trampantojo_core::normalize_ioc_value(&trampantojo_core::refang(
+                    &raw_ioc.value,
+                ));
 
                 let ioc = Ioc {
                     id: uuid::Uuid::new_v4(),
@@ -220,10 +224,7 @@ async fn poll_cycle(
     // 2. Persistir nuevo checkpoint
     if !new_codes.is_empty() || latest_date > state.last_polled_at {
         checkpoint::save(pool, latest_date, &new_codes, &state.seen_codes).await?;
-        tracing::info!(
-            new_alerts = new_codes.len(),
-            "Checkpoint actualizado"
-        );
+        tracing::info!(new_alerts = new_codes.len(), "Checkpoint actualizado");
     } else {
         tracing::info!("Sin alertas nuevas en este ciclo");
     }
@@ -237,7 +238,7 @@ async fn poll_cycle(
 fn parse_impersonates(title: &str) -> Option<String> {
     let suffixes = [
         " - Campaña Fraudulenta",
-        " - Campaign Fraudulenta",   // typo observado en algunas alertas
+        " - Campaign Fraudulenta", // typo observado en algunas alertas
     ];
     for suffix in &suffixes {
         if let Some(entity) = title.strip_suffix(suffix) {

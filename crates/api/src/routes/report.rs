@@ -34,11 +34,11 @@ pub enum IndicatorTypeInput {
 impl From<IndicatorTypeInput> for IndicatorType {
     fn from(v: IndicatorTypeInput) -> Self {
         match v {
-            IndicatorTypeInput::Domain      => IndicatorType::Domain,
-            IndicatorTypeInput::Url         => IndicatorType::Url,
-            IndicatorTypeInput::IpAddress   => IndicatorType::IpAddress,
+            IndicatorTypeInput::Domain => IndicatorType::Domain,
+            IndicatorTypeInput::Url => IndicatorType::Url,
+            IndicatorTypeInput::IpAddress => IndicatorType::IpAddress,
             IndicatorTypeInput::PhoneNumber => IndicatorType::PhoneNumber,
-            IndicatorTypeInput::FileHash    => IndicatorType::FileHash,
+            IndicatorTypeInput::FileHash => IndicatorType::FileHash,
         }
     }
 }

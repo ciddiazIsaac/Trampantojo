@@ -1,4 +1,4 @@
-﻿//! Funciones de filtrado puras (sin I/O) sobre AlertSchema.
+//! Funciones de filtrado puras (sin I/O) sobre AlertSchema.
 //! Todas las decisiones de "¿procesamos esta alerta/este IoC?" viven aquí,
 //! lo que las hace trivialmente testeables sin mocks de HTTP ni DB.
 
@@ -24,7 +24,7 @@ pub fn is_phishing(tags: &[String]) -> bool {
 /// (ej: técnicas MITRE ATT&CK, que son categorías, no indicadores de red).
 pub fn map_ioc_type(ioc_type: &str) -> Option<IndicatorType> {
     match ioc_type.to_lowercase().as_str() {
-        "url"    => Some(IndicatorType::Url),
+        "url" => Some(IndicatorType::Url),
         "domain" => Some(IndicatorType::Domain),
         "ipv4" | "ipv6" | "ip" => Some(IndicatorType::IpAddress),
         "md5" | "sha1" | "sha256" | "sha512" => Some(IndicatorType::FileHash),

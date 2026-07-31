@@ -4,7 +4,6 @@ use serde::Serialize;
 use trampantojo_core::{Ioc, IocEventStore, Source};
 use uuid::Uuid;
 
-
 // ---------------------------------------------------------------------------
 // Fila de evento — espejo directo del schema de ClickHouse
 //
@@ -95,7 +94,11 @@ impl IocEventStore for ClickHouseIocEventStore {
     /// Registra un evento de scoring para cada Ioc::merge ejecutado,
     /// sin importar si el trust_value cambió. Ver docs de IocEventStore
     /// en trampantojo-core para la justificación del "evento por merge".
-    async fn record_scoring_event(&self, ioc: &Ioc, trust_before: Option<f32>) -> anyhow::Result<()> {
+    async fn record_scoring_event(
+        &self,
+        ioc: &Ioc,
+        trust_before: Option<f32>,
+    ) -> anyhow::Result<()> {
         let (source_issuer, corroborations_after) = match &ioc.source {
             Source::Official { issuer, .. } => (Some(issuer.clone()), 0u32),
             Source::Community { corroborations } => (None, *corroborations),
@@ -149,7 +152,7 @@ struct DailyStatRow {
 impl trampantojo_core::IocStatsStore for ClickHouseIocEventStore {
     async fn get_daily_stats(&self, days: u32) -> anyhow::Result<Vec<trampantojo_core::DailyStat>> {
         // Obtenemos los datos agregados desde la vista/tabla materializada.
-        // Hacemos SUM() porque SummingMergeTree no garantiza que las filas con 
+        // Hacemos SUM() porque SummingMergeTree no garantiza que las filas con
         // misma clave estén ya consolidadas en el disco.
         let query = format!(
             "SELECT 

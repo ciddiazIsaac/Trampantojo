@@ -1,4 +1,4 @@
-﻿//! HTTP client para la API pública del CSIRT Chile.
+//! HTTP client para la API pública del CSIRT Chile.
 //! Tipado directamente contra el AlertSchema del OpenAPI oficial.
 
 use anyhow::Result;
@@ -51,7 +51,10 @@ impl CsirtClient {
             .user_agent("trampantojo-csirt-poller/0.1 (portafolio; contacto: ver repositorio)")
             .timeout(std::time::Duration::from_secs(30))
             .build()?;
-        Ok(Self { http, base: base.trim_end_matches('/').to_string() })
+        Ok(Self {
+            http,
+            base: base.trim_end_matches('/').to_string(),
+        })
     }
 
     /// Obtiene una página de alertas desde `from_date` en adelante.

@@ -1,3 +1,4 @@
+use crate::{ApiError, AppState};
 use axum::{
     extract::{ConnectInfo, Request, State},
     middleware::Next,
@@ -5,7 +6,6 @@ use axum::{
 };
 use std::net::SocketAddr;
 use trampantojo_core::hash_api_key;
-use crate::{ApiError, AppState};
 
 // ---------------------------------------------------------------------------
 // Límites del token bucket por categoría de cliente
@@ -22,13 +22,13 @@ use crate::{ApiError, AppState};
 /// Clientes sin API Key: acceso libre pero reducido. Suficiente para probar
 /// el endpoint o para el bot/dashboard interno, sin que un solo cliente
 /// anónimo pueda saturar Postgres.
-const ANON_CAPACITY: u32    = 5;
+const ANON_CAPACITY: u32 = 5;
 const ANON_REFILL_RATE: u32 = 1;
 
 /// Clientes con API Key válida: límite alto pensado para integraciones reales
 /// (fintechs, CERTs) que necesitan throughput sostenido. En el futuro esto
 /// debería venir de `info.plan` en lugar de ser una constante global.
-const KEYED_CAPACITY: u32    = 100;
+const KEYED_CAPACITY: u32 = 100;
 const KEYED_REFILL_RATE: u32 = 100;
 
 pub async fn rate_limit_middleware(
@@ -37,10 +37,7 @@ pub async fn rate_limit_middleware(
     req: Request,
     next: Next,
 ) -> Result<Response, ApiError> {
-    let api_key = req
-        .headers()
-        .get("X-API-Key")
-        .and_then(|v| v.to_str().ok());
+    let api_key = req.headers().get("X-API-Key").and_then(|v| v.to_str().ok());
 
     let (identifier, capacity, refill_rate) = match api_key {
         Some(key) => {
@@ -49,13 +46,19 @@ pub async fn rate_limit_middleware(
                 Ok(Some(info)) if info.is_active => {
                     // TODO (post-MVP): leer capacity/refill_rate desde info.plan
                     // para que cada organización tenga límites según su contrato.
-                    (format!("api_key:{}", hash), KEYED_CAPACITY, KEYED_REFILL_RATE)
+                    (
+                        format!("api_key:{}", hash),
+                        KEYED_CAPACITY,
+                        KEYED_REFILL_RATE,
+                    )
                 }
                 Ok(_) => {
                     // Clave presentada pero inválida o inactiva — rechazo explícito.
                     // No tratamos como anónimo: si alguien envió una key, esperaba
                     // autenticarse; ignorarla silenciosamente sería confuso.
-                    return Err(ApiError::Unauthorized("API Key inválida o inactiva".to_string()));
+                    return Err(ApiError::Unauthorized(
+                        "API Key inválida o inactiva".to_string(),
+                    ));
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "error consultando api_keys en postgres");
@@ -69,7 +72,11 @@ pub async fn rate_limit_middleware(
         }
     };
 
-    match state.rate_limiter.check_limit(&identifier, capacity, refill_rate).await {
+    match state
+        .rate_limiter
+        .check_limit(&identifier, capacity, refill_rate)
+        .await
+    {
         Ok((allowed, _remaining)) => {
             if allowed {
                 Ok(next.run(req).await)

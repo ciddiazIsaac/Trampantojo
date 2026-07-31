@@ -11,10 +11,16 @@ impl RedisRateLimiter {
 
     /// Implementa un algoritmo Token Bucket atómico en Redis vía Lua.
     /// Retorna (permitido, tokens_restantes).
-    pub async fn check_limit(&self, identifier: &str, capacity: u32, refill_rate_per_sec: u32) -> anyhow::Result<(bool, u32)> {
+    pub async fn check_limit(
+        &self,
+        identifier: &str,
+        capacity: u32,
+        refill_rate_per_sec: u32,
+    ) -> anyhow::Result<(bool, u32)> {
         let key = format!("ratelimit:{}", identifier);
-        
-        let script = Script::new(r#"
+
+        let script = Script::new(
+            r#"
             local key = KEYS[1]
             local capacity = tonumber(ARGV[1])
             local refill_rate = tonumber(ARGV[2])
@@ -47,7 +53,8 @@ impl RedisRateLimiter {
             redis.call("EXPIRE", key, math.ceil(capacity / refill_rate) + 10)
             
             return {allowed, tokens}
-        "#);
+        "#,
+        );
 
         let now_sec = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

@@ -131,7 +131,11 @@ pub struct MergeOutcome {
 #[async_trait::async_trait]
 pub trait IocRepository: Send + Sync {
     /// Estado actual — respaldado por Postgres, es lo que consulta la API.
-    async fn upsert(&self, ioc: &Ioc, deduplication_id: Option<&str>) -> anyhow::Result<MergeOutcome>;
+    async fn upsert(
+        &self,
+        ioc: &Ioc,
+        deduplication_id: Option<&str>,
+    ) -> anyhow::Result<MergeOutcome>;
     async fn find_by_value(&self, value: &str) -> anyhow::Result<Option<Ioc>>;
 }
 
@@ -139,7 +143,11 @@ pub trait IocRepository: Send + Sync {
 pub trait IocEventStore: Send + Sync {
     /// Log de eventos append-only — respaldado por ClickHouse, es lo que
     /// alimenta el dashboard de tendencias. Nunca se actualiza, solo se agrega.
-    async fn record_scoring_event(&self, ioc: &Ioc, trust_before: Option<f32>) -> anyhow::Result<()>;
+    async fn record_scoring_event(
+        &self,
+        ioc: &Ioc,
+        trust_before: Option<f32>,
+    ) -> anyhow::Result<()>;
     async fn record_verification_query(&self, value: &str, matched: bool) -> anyhow::Result<()>;
 }
 
@@ -240,7 +248,7 @@ impl Ioc {
 
 /// Normaliza un valor entrante (convierte a minúsculas, quita espacios extra,
 /// y elimina prefijos como http/https si es aplicable).
-/// Esta función vive en el dominio porque es una regla de negocio que 
+/// Esta función vive en el dominio porque es una regla de negocio que
 /// tanto la API como la capa de ingestión deben compartir.
 pub fn normalize_ioc_value(value: &str) -> String {
     let mut val = value.trim().to_lowercase();
@@ -325,13 +333,12 @@ pub fn refang(value: &str) -> String {
     // Esquemas defangeados (case-insensitive en la práctica, pero el CSIRT
     // los publica en minúsculas — aplicamos el reemplazo sobre la copia original).
     s = s.replace("hxxps://", "https://");
-    s = s.replace("hxxp://",  "http://");
+    s = s.replace("hxxp://", "http://");
     // Caracteres individuales entre corchetes
     s = s.replace("[.]", ".");
     s = s.replace("[:]", ":");
     s
 }
-
 
 #[cfg(test)]
 mod merge_tests {
@@ -344,7 +351,10 @@ mod merge_tests {
             indicator_type: IndicatorType::Domain,
             value: "banco-de-chile-verificacion.cl".into(),
             source,
-            trust_score: TrustScore { value: trust_value, factors: vec![] },
+            trust_score: TrustScore {
+                value: trust_value,
+                factors: vec![],
+            },
             status: IocStatus::Active,
             impersonates: Some("Banco de Chile".into()),
             first_seen: Utc::now(),
@@ -354,7 +364,13 @@ mod merge_tests {
 
     #[test]
     fn official_confirmado_no_se_degrada_por_comunidad_posterior() {
-        let existing = base_ioc(Source::Official { issuer: "CSIRT".into(), advisory_url: None }, 1.0);
+        let existing = base_ioc(
+            Source::Official {
+                issuer: "CSIRT".into(),
+                advisory_url: None,
+            },
+            1.0,
+        );
         let incoming = base_ioc(Source::Community { corroborations: 0 }, 0.3);
         let merged = Ioc::merge(Some(existing), incoming);
         assert!(matches!(merged.source, Source::Official { .. }));
@@ -364,7 +380,13 @@ mod merge_tests {
     #[test]
     fn oficial_entrante_siempre_pisa_estado_previo() {
         let existing = base_ioc(Source::Community { corroborations: 3 }, 0.65);
-        let incoming = base_ioc(Source::Official { issuer: "ANCI".into(), advisory_url: None }, 1.0);
+        let incoming = base_ioc(
+            Source::Official {
+                issuer: "ANCI".into(),
+                advisory_url: None,
+            },
+            1.0,
+        );
         let merged = Ioc::merge(Some(existing), incoming);
         assert!(matches!(merged.source, Source::Official { .. }));
     }
@@ -379,7 +401,10 @@ mod merge_tests {
         } else {
             panic!("se esperaba Source::Community");
         }
-        assert!(merged.trust_score.value < 0.8, "no debe cruzar el umbral de auto-notificación");
+        assert!(
+            merged.trust_score.value < 0.8,
+            "no debe cruzar el umbral de auto-notificación"
+        );
     }
 }
 
@@ -399,7 +424,10 @@ mod refang_tests {
 
     #[test]
     fn esquema_hxxps() {
-        assert_eq!(refang("hxxps://ejemplo.com/login"), "https://ejemplo.com/login");
+        assert_eq!(
+            refang("hxxps://ejemplo.com/login"),
+            "https://ejemplo.com/login"
+        );
     }
 
     #[test]

@@ -1,12 +1,12 @@
 use anyhow::{Context, Result};
-use trampantojo_core::NotificationEvent;
 use redis::{
-    streams::{StreamReadOptions, StreamReadReply},
     AsyncCommands, RedisResult,
+    streams::{StreamReadOptions, StreamReadReply},
 };
 use std::env;
 use std::time::Duration;
 use tracing::{error, info, warn};
+use trampantojo_core::NotificationEvent;
 
 const STREAM_KEY: &str = "notifications_stream";
 const GROUP_NAME: &str = "notifier_group";
@@ -48,7 +48,8 @@ async fn main() -> Result<()> {
         .timeout(Duration::from_secs(8))
         .build()
         .context("Failed to build HTTP client")?;
-    let webhook_url = env::var("WEBHOOK_URL").expect("WEBHOOK_URL debe estar configurada (MVP fijo)");
+    let webhook_url =
+        env::var("WEBHOOK_URL").expect("WEBHOOK_URL debe estar configurada (MVP fijo)");
 
     // Tarea separada o loop intercalado. Lo haremos intercalado para simplicidad del MVP.
     let mut last_pending_check = tokio::time::Instant::now();
@@ -66,14 +67,16 @@ async fn main() -> Result<()> {
             .block(5000) // 5 segundos, para poder chequear PEL regularmente
             .count(10);
 
-        let reply: RedisResult<StreamReadReply> = con.xread_options(&[STREAM_KEY], &[">"], &opts).await;
+        let reply: RedisResult<StreamReadReply> =
+            con.xread_options(&[STREAM_KEY], &[">"], &opts).await;
 
         match reply {
             Ok(stream_reply) => {
                 for stream in stream_reply.keys {
                     for message in stream.ids {
                         let id = message.id.clone();
-                        process_message(&mut con, &http_client, &webhook_url, id, message.map).await;
+                        process_message(&mut con, &http_client, &webhook_url, id, message.map)
+                            .await;
                     }
                 }
             }
@@ -116,20 +119,32 @@ async fn check_and_process_pending(
 
                     // Intentar reclamarlo usando XCLAIM para nuestro consumidor
                     // Esto incrementará su times_delivered y reseteará su idle time
-                    let claimed: RedisResult<redis::streams::StreamClaimReply> = redis::cmd("XCLAIM")
-                        .arg(STREAM_KEY)
-                        .arg(GROUP_NAME)
-                        .arg(CONSUMER_NAME)
-                        .arg(PENDING_IDLE_TIME_MS)
-                        .arg(&id)
-                        .query_async(con)
-                        .await;
+                    let claimed: RedisResult<redis::streams::StreamClaimReply> =
+                        redis::cmd("XCLAIM")
+                            .arg(STREAM_KEY)
+                            .arg(GROUP_NAME)
+                            .arg(CONSUMER_NAME)
+                            .arg(PENDING_IDLE_TIME_MS)
+                            .arg(&id)
+                            .query_async(con)
+                            .await;
 
                     match claimed {
                         Ok(claim_reply) => {
                             for message in claim_reply.ids {
-                                warn!("Reclamando y reintentando mensaje {} (intento {})", message.id, times_delivered + 1);
-                                process_message(con, http_client, webhook_url, message.id, message.map).await;
+                                warn!(
+                                    "Reclamando y reintentando mensaje {} (intento {})",
+                                    message.id,
+                                    times_delivered + 1
+                                );
+                                process_message(
+                                    con,
+                                    http_client,
+                                    webhook_url,
+                                    message.id,
+                                    message.map,
+                                )
+                                .await;
                             }
                         }
                         Err(e) => {
@@ -152,9 +167,9 @@ async fn process_message(
     id: String,
     map: std::collections::HashMap<String, redis::Value>,
 ) {
-    let payload_str: Option<String> = map.get("payload").and_then(|v| {
-        redis::FromRedisValue::from_redis_value(v).ok()
-    });
+    let payload_str: Option<String> = map
+        .get("payload")
+        .and_then(|v| redis::FromRedisValue::from_redis_value(v).ok());
 
     if let Some(p) = payload_str {
         match serde_json::from_str::<NotificationEvent>(&p) {
@@ -166,27 +181,32 @@ async fn process_message(
                     .arg("1")
                     .query_async(con)
                     .await;
-                    
+
                 match is_new {
                     Ok(true) => {
                         // Expirar la key de idempotencia (por ejemplo, en 24hs)
                         let _: RedisResult<()> = con.expire(&notified_key, 86400).await;
 
-                        info!("Procesando notificación para {}: {} (Score: {})", id, event.ioc_value, event.trust_value);
-                        
+                        info!(
+                            "Procesando notificación para {}: {} (Score: {})",
+                            id, event.ioc_value, event.trust_value
+                        );
+
                         // Decisión 4: Enviar notificación al destino fijo
-                        let res = http_client.post(webhook_url)
-                            .json(&event)
-                            .send()
-                            .await;
-                            
+                        let res = http_client.post(webhook_url).json(&event).send().await;
+
                         match res {
                             Ok(r) if r.status().is_success() => {
                                 info!("Notificación enviada exitosamente ({})", id);
-                                let _: RedisResult<()> = con.xack(STREAM_KEY, GROUP_NAME, &[&id]).await;
+                                let _: RedisResult<()> =
+                                    con.xack(STREAM_KEY, GROUP_NAME, &[&id]).await;
                             }
                             Ok(r) => {
-                                error!("Error al enviar notificación (HTTP {}): {:?}", r.status(), r.text().await);
+                                error!(
+                                    "Error al enviar notificación (HTTP {}): {:?}",
+                                    r.status(),
+                                    r.text().await
+                                );
                                 // Borrar llave de idempotencia para permitir un reintento limpio
                                 let _: RedisResult<()> = con.del(&notified_key).await;
                                 // No damos XACK, queda en la PEL para ser reintentado por XPENDING
