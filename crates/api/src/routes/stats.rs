@@ -1,6 +1,5 @@
 use axum::{Json, extract::State, response::IntoResponse};
 use serde::Deserialize;
-use std::cmp::min;
 
 use crate::{ApiError, AppState, ValidatedQuery};
 
@@ -13,9 +12,10 @@ pub async fn get_stats(
     State(state): State<AppState>,
     ValidatedQuery(params): ValidatedQuery<StatsParams>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // Por defecto 7 días, limitamos a 90 máximo para evitar consultas muy pesadas
+    // Por defecto 7 días, mínimo 1 y máximo 90 para evitar consultas vacías o muy pesadas.
+    // days=0 produciría un resultado vacío sin error, lo cual es confuso para el cliente.
     let days = params.days.unwrap_or(7);
-    let days = min(days, 90);
+    let days = days.clamp(1, 90);
 
     let stats = state.stats_store.get_daily_stats(days).await.map_err(|e| {
         tracing::error!("Error consultando stats: {:?}", e);
