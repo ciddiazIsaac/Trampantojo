@@ -113,6 +113,7 @@ async fn poll_cycle(
     let mut new_codes: Vec<String> = Vec::new();
     let mut latest_date = state.last_polled_at;
     let mut page = 1u32;
+    let mut total_fetched: usize = 0;
 
     loop {
         let resp = http_client.fetch_alerts(state.last_polled_at, page).await?;
@@ -214,8 +215,8 @@ async fn poll_cycle(
         }
 
         // ¿Quedan más páginas?
-        let fetched_so_far = (page as usize) * resp.items.len().max(1);
-        if fetched_so_far >= resp.count as usize || resp.items.is_empty() {
+        total_fetched += resp.items.len();
+        if resp.items.is_empty() || total_fetched >= resp.count as usize {
             break;
         }
         page += 1;
@@ -238,7 +239,8 @@ async fn poll_cycle(
 fn parse_impersonates(title: &str) -> Option<String> {
     let suffixes = [
         " - Campaña Fraudulenta",
-        " - Campaign Fraudulenta", // typo observado en algunas alertas
+        " - Campaña Fraudulenta",  // variante con tilde distinta observada en algunas alertas
+        " - Campaign Fraudulenta", // typo observado en algunas alertas (sin tilde)
     ];
     for suffix in &suffixes {
         if let Some(entity) = title.strip_suffix(suffix) {
