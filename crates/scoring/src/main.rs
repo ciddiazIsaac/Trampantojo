@@ -4,6 +4,8 @@ use std::time::Duration;
 use storage::{clickhouse::ClickHouseIocEventStore, postgres::PgIocRepository};
 use tracing::{info, warn};
 
+pub mod calculator;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
