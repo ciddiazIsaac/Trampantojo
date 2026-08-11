@@ -137,6 +137,7 @@ pub trait IocRepository: Send + Sync {
         deduplication_id: Option<&str>,
     ) -> anyhow::Result<MergeOutcome>;
     async fn find_by_value(&self, value: &str) -> anyhow::Result<Option<Ioc>>;
+    async fn find_active(&self) -> anyhow::Result<Vec<Ioc>>;
 }
 
 #[async_trait::async_trait]

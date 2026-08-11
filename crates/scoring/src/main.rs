@@ -2,9 +2,10 @@ use sqlx::postgres::PgPoolOptions;
 use std::env;
 use std::time::Duration;
 use storage::{clickhouse::ClickHouseIocEventStore, postgres::PgIocRepository};
-use tracing::{info, warn};
+use tracing::info;
 
 pub mod calculator;
+pub mod worker;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -28,9 +29,12 @@ async fn main() -> anyhow::Result<()> {
     info!("Conectando a ClickHouse...");
     let _ch_store = ClickHouseIocEventStore::new(&clickhouse_url);
 
+    let ch_client = clickhouse::Client::default().with_url(&clickhouse_url);
+
     info!("Motor de Calificación inicializado correctamente.");
     
-    // Aquí irá el loop del worker
+    // Iniciar el loop del worker (bloqueante)
+    worker::run_worker(_pg_repo, pool, ch_client, _ch_store).await;
 
     Ok(())
 }

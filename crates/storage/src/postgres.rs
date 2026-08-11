@@ -128,6 +128,20 @@ impl IocRepository for PgIocRepository {
         row.map(Ioc::try_from).transpose()
     }
 
+    async fn find_active(&self) -> anyhow::Result<Vec<Ioc>> {
+        let rows: Vec<IocRow> = sqlx::query_as(&format!(
+            "SELECT {SELECT_COLUMNS} FROM iocs WHERE status = 'active'"
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut iocs = Vec::with_capacity(rows.len());
+        for row in rows {
+            iocs.push(Ioc::try_from(row)?);
+        }
+        Ok(iocs)
+    }
+
     /// Lock de fila + fusión en Rust puro (`Ioc::merge`, testeada aparte)
     /// + un solo write. La transacción evita que dos ingestas concurrentes
     /// se pisen la corroboración una a la otra, y además asegura que
