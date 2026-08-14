@@ -19,6 +19,7 @@
 //                            Default: 8081 (el 8080 lo usa la API REST).
 // ---------------------------------------------------------------------------
 
+mod parser;
 mod webhook;
 
 use axum::Router;
