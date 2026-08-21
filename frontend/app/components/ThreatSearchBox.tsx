@@ -10,6 +10,7 @@
 
 import { useState, useRef } from "react";
 import type { CheckResult } from "@/lib/api";
+import ThreatResult from "./ThreatResult";
 
 type SearchState =
   | { status: "idle" }
@@ -115,48 +116,9 @@ export default function ThreatSearchBox() {
         </button>
       </form>
 
-      {/* Resultado */}
-      {state.status === "threat" && (
-        <div className="result-card result-threat" role="alert">
-          <div className="result-header">
-            <span className="result-badge result-badge-threat">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
-                <line x1="12" y1="9" x2="12" y2="13"/>
-                <line x1="12" y1="17" x2="12.01" y2="17"/>
-              </svg>
-              Amenaza conocida
-            </span>
-            {state.data.trust_value !== null && (
-              <span className="result-trust">
-                Confianza: <strong>{Math.round(state.data.trust_value * 100)}%</strong>
-              </span>
-            )}
-          </div>
-          <p className="result-value">{state.data.value}</p>
-          {state.data.impersonates && (
-            <p className="result-impersonates">
-              Suplanta a <strong>{state.data.impersonates}</strong>
-            </p>
-          )}
-        </div>
-      )}
-
-      {state.status === "safe" && (
-        <div className="result-card result-safe" role="status">
-          <div className="result-header">
-            <span className="result-badge result-badge-safe">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <polyline points="20 6 9 17 4 12"/>
-              </svg>
-              No encontrado
-            </span>
-          </div>
-          <p className="result-value">{state.data.value}</p>
-          <p className="result-meta">
-            No figura en la base de indicadores de amenaza activos.
-          </p>
-        </div>
+      {/* Resultado — delegado a ThreatResult */}
+      {(state.status === "threat" || state.status === "safe") && (
+        <ThreatResult variant={state.status} data={state.data} />
       )}
 
       {state.status === "error" && (
