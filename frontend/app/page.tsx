@@ -1,6 +1,27 @@
+import { Suspense } from "react";
 import Link from "next/link";
 import ThreatSearchBox from "./components/ThreatSearchBox";
 import DashboardStats from "./components/DashboardStats";
+
+/** Skeleton que ocupa el espacio del dashboard mientras el Server Component carga */
+function DashboardSkeleton() {
+  return (
+    <section className="dashboard-section" aria-busy="true" aria-label="Cargando estadísticas">
+      <div className="dashboard-header">
+        <div className="skeleton skeleton-title" />
+      </div>
+      <div className="kpi-grid">
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="kpi-card">
+            <div className="skeleton skeleton-kpi-value" />
+            <div className="skeleton skeleton-kpi-label" />
+          </div>
+        ))}
+      </div>
+      <div className="skeleton skeleton-chart" />
+    </section>
+  );
+}
 
 export default function Home() {
   return (
@@ -22,7 +43,7 @@ export default function Home() {
       </nav>
 
       <main className="page-main">
-        {/* Hero Section */}
+        {/* Hero Section — disponible inmediatamente, no bloquea el stream */}
         <header className="container hero">
           <div className="hero-content">
             <div className="hero-eyebrow">
@@ -38,19 +59,16 @@ export default function Home() {
               como malicioso por fuentes oficiales (CSIRT) o corroborado por la
               comunidad.
             </p>
-            
+
             <ThreatSearchBox />
           </div>
         </header>
 
-        {/* Dashboard Section */}
+        {/* Dashboard Section — streamed; muestra skeleton hasta que el Server Component resuelva */}
         <div className="container">
-          {/* 
-            DashboardStats es un Server Component que obtiene datos reales 
-            desde la API Rust y los renderiza usando componentes estáticos y 
-            Client Components interactivos (como el gráfico).
-          */}
-          <DashboardStats />
+          <Suspense fallback={<DashboardSkeleton />}>
+            <DashboardStats />
+          </Suspense>
         </div>
       </main>
 
@@ -73,3 +91,4 @@ export default function Home() {
     </>
   );
 }
+
