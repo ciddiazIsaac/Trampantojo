@@ -28,3 +28,98 @@ services:
     ports:
       - "6379:6379"
     command: redis-server --save "" --appendonly no
+
+  api:
+    build:
+      context: ../../
+      dockerfile: infra/docker/Dockerfile.dev
+    volumes:
+      - ../../:/app
+      - cargo-registry:/usr/local/cargo/registry
+    environment:
+      - DATABASE_URL=postgres://trampantojo:password@postgres:5432/trampantojo
+      - CLICKHOUSE_URL=http://clickhouse:8123
+      - REDIS_URL=redis://redis:6379
+      - RUST_LOG=info
+    command: cargo run --bin api
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+      - clickhouse
+      - redis
+
+  scoring:
+    build:
+      context: ../../
+      dockerfile: infra/docker/Dockerfile.dev
+    volumes:
+      - ../../:/app
+      - cargo-registry:/usr/local/cargo/registry
+    environment:
+      - DATABASE_URL=postgres://trampantojo:password@postgres:5432/trampantojo
+      - CLICKHOUSE_URL=http://clickhouse:8123
+      - REDIS_URL=redis://redis:6379
+      - RUST_LOG=info
+    command: cargo run --bin scoring
+    depends_on:
+      - postgres
+      - clickhouse
+      - redis
+
+  notifier:
+    build:
+      context: ../../
+      dockerfile: infra/docker/Dockerfile.dev
+    volumes:
+      - ../../:/app
+      - cargo-registry:/usr/local/cargo/registry
+    environment:
+      - DATABASE_URL=postgres://trampantojo:password@postgres:5432/trampantojo
+      - CLICKHOUSE_URL=http://clickhouse:8123
+      - REDIS_URL=redis://redis:6379
+      - RUST_LOG=info
+    command: cargo run --bin notifier
+    depends_on:
+      - postgres
+      - clickhouse
+      - redis
+
+  csirt-poller:
+    build:
+      context: ../../
+      dockerfile: infra/docker/Dockerfile.dev
+    volumes:
+      - ../../:/app
+      - cargo-registry:/usr/local/cargo/registry
+    environment:
+      - DATABASE_URL=postgres://trampantojo:password@postgres:5432/trampantojo
+      - CLICKHOUSE_URL=http://clickhouse:8123
+      - REDIS_URL=redis://redis:6379
+      - RUST_LOG=info
+    command: cargo run --bin csirt-poller
+    depends_on:
+      - postgres
+      - clickhouse
+      - redis
+
+  whatsapp-bot:
+    build:
+      context: ../../
+      dockerfile: infra/docker/Dockerfile.dev
+    volumes:
+      - ../../:/app
+      - cargo-registry:/usr/local/cargo/registry
+    environment:
+      - DATABASE_URL=postgres://trampantojo:password@postgres:5432/trampantojo
+      - CLICKHOUSE_URL=http://clickhouse:8123
+      - REDIS_URL=redis://redis:6379
+      - RUST_LOG=info
+    command: cargo run --bin whatsapp-bot
+    depends_on:
+      - postgres
+      - clickhouse
+      - redis
+
+volumes:
+  cargo-registry:
