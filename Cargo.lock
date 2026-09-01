@@ -2569,6 +2569,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "time",
+ "tracing",
  "trampantojo-core",
  "uuid",
 ]

@@ -150,6 +150,10 @@ pub struct AppState {
     /// Separado del trait IocRepository para no contaminar el contrato
     /// de dominio con una operación puramente operacional.
     pub pg_pool: Arc<sqlx::PgPool>,
+    /// Caché Redis para consultas de lectura de IoC.
+    /// Best-effort: un fallo de Redis no rompe la respuesta — degenera a
+    /// consulta directa a Postgres sin impacto observable para el cliente.
+    pub ioc_cache: Arc<storage::redis_cache::RedisIocCache>,
 }
 
 // ---------------------------------------------------------------------------
@@ -186,12 +190,64 @@ async fn check_indicator(
     // testeable: lowercase, quitar protocolo, trim, etc. No se duplica aquí.
     let normalized = trampantojo_core::normalize_ioc_value(&params.value);
 
+    // TTL de caché leído al momento del request para que un restart sea
+    // suficiente para cambiarlo — no necesitamos hot reload.
+    let cache_ttl: u64 = std::env::var("CACHE_TTL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(300);
+
+    // ---------------------------------------------------------------------------
+    // Capa 1: Redis Cache-Aside
+    //
+    // Consultamos Redis primero. Un fallo de Redis (timeout, conexión caída)
+    // se loguea como warn y se trata como miss — el sistema degenera a consulta
+    // directa a Postgres sin impacto observable para el cliente.
+    // ---------------------------------------------------------------------------
+    if let Some(cached) = state.ioc_cache.get(&normalized).await {
+        tracing::debug!(value = %normalized, "cache hit en Redis");
+        return Ok(match cached {
+            Some(ioc) if ioc.trust_score.is_actionable() => Json(CheckResponse {
+                value: normalized,
+                is_known_threat: true,
+                trust_value: Some(ioc.trust_score.value),
+                impersonates: ioc.impersonates,
+            }),
+            other => Json(CheckResponse {
+                value: normalized,
+                is_known_threat: false,
+                trust_value: other.map(|i| i.trust_score.value),
+                impersonates: None,
+            }),
+        });
+    }
+
+    // ---------------------------------------------------------------------------
+    // Capa 2: Postgres (cache miss)
+    //
+    // Consultamos Postgres y, en background (tokio::spawn), poblamos la caché.
+    // El spawn no bloquea la respuesta al cliente — la escritura en Redis ocurre
+    // concurrentemente mientras el handler ya está terminando.
+    // ---------------------------------------------------------------------------
+    tracing::debug!(value = %normalized, "cache miss; consultando postgres");
+
     let found = state.repo.find_by_value(&normalized).await.map_err(|e| {
         // El detalle real (mensaje de sqlx, tipo de error) va a los logs.
         // Al cliente solo llega ApiError::Internal con mensaje genérico.
         tracing::error!(error = %e, "fallo al consultar iocs en postgres");
         ApiError::Internal
     })?;
+
+    // Poblar caché en background — no esperamos el resultado.
+    // Clonamos lo mínimo necesario: cache (Arc, barato) + normalized (String).
+    {
+        let cache = state.ioc_cache.clone();
+        let key = normalized.clone();
+        let value_to_cache = found.clone();
+        tokio::spawn(async move {
+            cache.set(&key, &value_to_cache, cache_ttl).await;
+        });
+    }
 
     Ok(match found {
         Some(ioc) if ioc.trust_score.is_actionable() => Json(CheckResponse {
@@ -254,6 +310,10 @@ async fn main() -> anyhow::Result<()> {
     let redis_client = redis::Client::open(redis_url.clone())?;
     let redis_conn = redis::aio::ConnectionManager::new(redis_client).await?;
 
+    // La caché de IoC comparte el mismo ConnectionManager que el rate limiter.
+    // ConnectionManager es un Arc interno — clonar es O(1) y no abre sockets nuevos.
+    let ioc_cache = storage::redis_cache::RedisIocCache::new(redis_conn.clone());
+
     let repo = PgIocRepository::new(pool.clone());
     let repo_arc = Arc::new(repo.clone());
 
@@ -298,6 +358,7 @@ async fn main() -> anyhow::Result<()> {
         stats_store: Arc::new(event_store),
         trusted_proxies,
         pg_pool: Arc::new(pool),
+        ioc_cache: Arc::new(ioc_cache),
     };
 
     // api_routes agrupa todas las rutas que requieren auth + rate limiting.
