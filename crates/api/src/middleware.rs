@@ -5,31 +5,22 @@ use axum::{
     response::Response,
 };
 use std::net::SocketAddr;
-use trampantojo_core::hash_api_key;
+use trampantojo_core::{RateLimitPlan, hash_api_key};
 
 // ---------------------------------------------------------------------------
-// Límites del token bucket por categoría de cliente
+// Rate limiting dinámico por plan de API Key
 //
-// Separados en constantes nombradas para que el lector entienda la intención
-// sin tener que descifrar números mágicos inline. Si los datos reales muestran
-// que 5 req/s es demasiado restrictivo para anónimos, hay un solo lugar donde
-// cambiarlo.
+// Los límites (capacity, refill_rate) se derivan del campo `plan` almacenado
+// en la tabla `api_keys` de Postgres. La conversión a límites numéricos vive
+// en `RateLimitPlan` (trampantojo-core) como regla de negocio, no aquí.
 //
-// Semántica: capacity = tokens máximos acumulables (burst), refill_rate =
-// tokens que se recargan por segundo (throughput sostenido).
+// Semántica del token bucket:
+//   capacity    = tokens máximos acumulables (burst permitido)
+//   refill_rate = tokens recargados por segundo (throughput sostenido)
+//
+// Planes actuales: Anonymous < Free < Premium < Enterprise.
+// Un plan desconocido en DB cae a los límites de Free (conservador).
 // ---------------------------------------------------------------------------
-
-/// Clientes sin API Key: acceso libre pero reducido. Suficiente para probar
-/// el endpoint o para el bot/dashboard interno, sin que un solo cliente
-/// anónimo pueda saturar Postgres.
-const ANON_CAPACITY: u32 = 5;
-const ANON_REFILL_RATE: u32 = 1;
-
-/// Clientes con API Key válida: límite alto pensado para integraciones reales
-/// (fintechs, CERTs) que necesitan throughput sostenido. En el futuro esto
-/// debería venir de `info.plan` en lugar de ser una constante global.
-const KEYED_CAPACITY: u32 = 100;
-const KEYED_REFILL_RATE: u32 = 100;
 
 pub async fn rate_limit_middleware(
     State(state): State<AppState>,
@@ -44,13 +35,13 @@ pub async fn rate_limit_middleware(
             let hash = hash_api_key(key);
             match state.api_keys.find_by_hash(&hash).await {
                 Ok(Some(info)) if info.is_active => {
-                    // TODO (post-MVP): leer capacity/refill_rate desde info.plan
-                    // para que cada organización tenga límites según su contrato.
-                    (
-                        format!("api_key:{}", hash),
-                        KEYED_CAPACITY,
-                        KEYED_REFILL_RATE,
-                    )
+                    let plan = RateLimitPlan::from_plan_str(&info.plan);
+                    tracing::debug!(
+                        plan = %plan,
+                        org_id = %info.org_id,
+                        "rate limit resuelto para api key autenticada"
+                    );
+                    (format!("api_key:{}", hash), plan.capacity(), plan.refill_rate())
                 }
                 Ok(_) => {
                     // Clave presentada pero inválida o inactiva — rechazo explícito.
@@ -67,8 +58,9 @@ pub async fn rate_limit_middleware(
             }
         }
         None => {
-            // Sin key: rate limit por IP (anónimo).
-            (format!("ip:{}", addr.ip()), ANON_CAPACITY, ANON_REFILL_RATE)
+            // Sin key: rate limit por IP usando límites del plan Anonymous.
+            let plan = RateLimitPlan::Anonymous;
+            (format!("ip:{}", addr.ip()), plan.capacity(), plan.refill_rate())
         }
     };
 

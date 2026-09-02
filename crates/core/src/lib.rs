@@ -193,6 +193,85 @@ pub trait ApiKeyRepository: Send + Sync {
 }
 
 // ---------------------------------------------------------------------
+// RateLimitPlan — regla de negocio: qué throughput le corresponde a
+// cada plan de API key.
+//
+// Esta es la única fuente de verdad para los límites del token bucket.
+// Si un plan cambia, se cambia acá y todo el workspace lo hereda.
+// Si llega un plan no reconocido desde la DB (ej: un plan beta que
+// todavía no está en código), cae a los límites de Free — conservador
+// pero seguro.
+// ---------------------------------------------------------------------
+
+/// Planes de suscripción que determinan los límites del token bucket.
+///
+/// Semántica:
+/// - `capacity`    → tokens máximos acumulables (burst máximo)
+/// - `refill_rate` → tokens recargados por segundo (throughput sostenido)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RateLimitPlan {
+    /// Sin API Key — acceso reducido por IP. Suficiente para evaluar el
+    /// producto o para el bot/dashboard interno sin saturar Postgres.
+    Anonymous,
+    /// Plan gratuito: acceso limitado para integraciones básicas.
+    Free,
+    /// Plan de pago: throughput alto para fintechs y CERTs.
+    Premium,
+    /// Plan corporativo: sin límite práctico para integraciones críticas.
+    Enterprise,
+    /// Plan en DB que todavía no tiene mapeo en código. Usa límites de
+    /// Free por seguridad — nunca abre el floodgate ante lo desconocido.
+    Unknown(String),
+}
+
+impl RateLimitPlan {
+    /// Parsea el string del campo `plan` en la tabla `api_keys`.
+    /// Case-insensitive para tolerar variaciones de capitalización en DB.
+    pub fn from_plan_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "free" => Self::Free,
+            "premium" => Self::Premium,
+            "enterprise" => Self::Enterprise,
+            other => Self::Unknown(other.to_string()),
+        }
+    }
+
+    /// Capacidad máxima del token bucket (burst).
+    pub fn capacity(&self) -> u32 {
+        match self {
+            Self::Anonymous => 5,
+            Self::Free => 20,
+            Self::Premium => 200,
+            Self::Enterprise => 1000,
+            Self::Unknown(_) => 20, // conservador: igual que Free
+        }
+    }
+
+    /// Tokens recargados por segundo (throughput sostenido).
+    pub fn refill_rate(&self) -> u32 {
+        match self {
+            Self::Anonymous => 1,
+            Self::Free => 5,
+            Self::Premium => 50,
+            Self::Enterprise => 200,
+            Self::Unknown(_) => 5, // conservador: igual que Free
+        }
+    }
+}
+
+impl std::fmt::Display for RateLimitPlan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Anonymous => write!(f, "anonymous"),
+            Self::Free => write!(f, "free"),
+            Self::Premium => write!(f, "premium"),
+            Self::Enterprise => write!(f, "enterprise"),
+            Self::Unknown(s) => write!(f, "unknown({})", s),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
 // Merge Logic — reglas de negocio de scoring
 // ---------------------------------------------------------------------
 
@@ -500,5 +579,76 @@ mod threshold_tests {
     #[test]
     fn sin_cambio_ya_confirmado_no_notifica() {
         assert!(!crossed_actionable_threshold(Some(0.9), 0.9));
+    }
+}
+
+#[cfg(test)]
+mod rate_limit_plan_tests {
+    use super::RateLimitPlan;
+
+    // --- Parsing ---
+
+    #[test]
+    fn parsea_free_exacto() {
+        assert_eq!(RateLimitPlan::from_plan_str("free"), RateLimitPlan::Free);
+    }
+
+    #[test]
+    fn parsea_premium_case_insensitive() {
+        assert_eq!(RateLimitPlan::from_plan_str("Premium"), RateLimitPlan::Premium);
+        assert_eq!(RateLimitPlan::from_plan_str("PREMIUM"), RateLimitPlan::Premium);
+    }
+
+    #[test]
+    fn parsea_enterprise() {
+        assert_eq!(RateLimitPlan::from_plan_str("enterprise"), RateLimitPlan::Enterprise);
+    }
+
+    #[test]
+    fn plan_desconocido_se_convierte_en_unknown() {
+        match RateLimitPlan::from_plan_str("beta_access") {
+            RateLimitPlan::Unknown(s) => assert_eq!(s, "beta_access"),
+            other => panic!("se esperaba Unknown, obtuvo {:?}", other),
+        }
+    }
+
+    // --- Límites: orden jerárquico correcto ---
+
+    #[test]
+    fn capacidad_aumenta_con_el_plan() {
+        assert!(RateLimitPlan::Anonymous.capacity() < RateLimitPlan::Free.capacity());
+        assert!(RateLimitPlan::Free.capacity() < RateLimitPlan::Premium.capacity());
+        assert!(RateLimitPlan::Premium.capacity() < RateLimitPlan::Enterprise.capacity());
+    }
+
+    #[test]
+    fn refill_aumenta_con_el_plan() {
+        assert!(RateLimitPlan::Anonymous.refill_rate() < RateLimitPlan::Free.refill_rate());
+        assert!(RateLimitPlan::Free.refill_rate() < RateLimitPlan::Premium.refill_rate());
+        assert!(RateLimitPlan::Premium.refill_rate() < RateLimitPlan::Enterprise.refill_rate());
+    }
+
+    // --- Fallback de seguridad ---
+
+    #[test]
+    fn unknown_usa_limites_de_free_no_de_enterprise() {
+        // Un plan desconocido NO debe heredar límites altos por error.
+        let unknown = RateLimitPlan::Unknown("plan_misterioso".to_string());
+        assert_eq!(unknown.capacity(), RateLimitPlan::Free.capacity());
+        assert_eq!(unknown.refill_rate(), RateLimitPlan::Free.refill_rate());
+    }
+
+    // --- Display ---
+
+    #[test]
+    fn display_produce_strings_legibles() {
+        assert_eq!(RateLimitPlan::Anonymous.to_string(), "anonymous");
+        assert_eq!(RateLimitPlan::Free.to_string(), "free");
+        assert_eq!(RateLimitPlan::Premium.to_string(), "premium");
+        assert_eq!(RateLimitPlan::Enterprise.to_string(), "enterprise");
+        assert_eq!(
+            RateLimitPlan::Unknown("beta".to_string()).to_string(),
+            "unknown(beta)"
+        );
     }
 }
