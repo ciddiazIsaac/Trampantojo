@@ -85,3 +85,53 @@ pub async fn rate_limit_middleware(
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Middleware de JWT para proteger rutas de administración / dashboard
+// ---------------------------------------------------------------------------
+use jsonwebtoken::{decode, DecodingKey, Validation, Algorithm};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Claims {
+    pub sub: String, // email
+    pub exp: usize,
+    pub org_id: String,
+    pub role: String,
+}
+
+pub async fn jwt_middleware(
+    mut req: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
+    let auth_header = req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|val| val.to_str().ok());
+
+    let token = match auth_header {
+        Some(auth) if auth.starts_with("Bearer ") => &auth["Bearer ".len()..],
+        _ => {
+            return Err(ApiError::Unauthorized("Falta header de autorización o es inválido".to_string()));
+        }
+    };
+
+    let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "default_secret_for_dev".to_string());
+
+    let token_data = match decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(jwt_secret.as_ref()),
+        &Validation::new(Algorithm::HS256),
+    ) {
+        Ok(data) => data,
+        Err(e) => {
+            tracing::debug!(error = %e, "token jwt inválido");
+            return Err(ApiError::Unauthorized("Token inválido o expirado".to_string()));
+        }
+    };
+
+    // Inject claims into request extensions so handlers can use them
+    req.extensions_mut().insert(token_data.claims);
+
+    Ok(next.run(req).await)
+}

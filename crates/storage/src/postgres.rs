@@ -283,4 +283,104 @@ impl ApiKeyRepository for PgIocRepository {
             }
         }))
     }
+
+    async fn find_by_org(&self, org_id: uuid::Uuid) -> anyhow::Result<Vec<ApiKeyInfo>> {
+        let recs = sqlx::query(
+            r#"
+            SELECT key_hash, org_id, plan, is_active
+            FROM api_keys
+            WHERE org_id = $1
+            "#,
+        )
+        .bind(org_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(recs.into_iter().map(|r| {
+            use sqlx::Row;
+            ApiKeyInfo {
+                key_hash: r.get("key_hash"),
+                org_id: r.get("org_id"),
+                plan: r.get("plan"),
+                is_active: r.get("is_active"),
+            }
+        }).collect())
+    }
+
+    async fn create(&self, org_id: uuid::Uuid, plan: &str, key_hash: &str) -> anyhow::Result<ApiKeyInfo> {
+        let rec = sqlx::query(
+            r#"
+            INSERT INTO api_keys (key_hash, org_id, plan, is_active)
+            VALUES ($1, $2, $3, true)
+            RETURNING key_hash, org_id, plan, is_active
+            "#,
+        )
+        .bind(key_hash)
+        .bind(org_id)
+        .bind(plan)
+        .fetch_one(&self.pool)
+        .await?;
+
+        use sqlx::Row;
+        Ok(ApiKeyInfo {
+            key_hash: rec.get("key_hash"),
+            org_id: rec.get("org_id"),
+            plan: rec.get("plan"),
+            is_active: rec.get("is_active"),
+        })
+    }
+}
+
+use trampantojo_core::{User, UserRepository};
+
+#[async_trait::async_trait]
+impl UserRepository for PgIocRepository {
+    async fn find_by_email(&self, email: &str) -> anyhow::Result<Option<User>> {
+        let rec = sqlx::query(
+            r#"
+            SELECT id, email, password_hash, org_id, role
+            FROM users
+            WHERE email = $1
+            "#,
+        )
+        .bind(email)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(rec.map(|r| {
+            use sqlx::Row;
+            User {
+                id: r.get("id"),
+                email: r.get("email"),
+                password_hash: r.get("password_hash"),
+                org_id: r.get("org_id"),
+                role: r.get("role"),
+            }
+        }))
+    }
+
+    async fn create_user(&self, email: &str, password_hash: &str, org_id: uuid::Uuid, role: &str) -> anyhow::Result<User> {
+        let rec = sqlx::query(
+            r#"
+            INSERT INTO users (email, password_hash, org_id, role)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id, email, password_hash, org_id, role
+            "#,
+        )
+        .bind(email)
+        .bind(password_hash)
+        .bind(org_id)
+        .bind(role)
+        .fetch_one(&self.pool)
+        .await?;
+
+        use sqlx::Row;
+        Ok(User {
+            id: rec.get("id"),
+            email: rec.get("email"),
+            password_hash: rec.get("password_hash"),
+            org_id: rec.get("org_id"),
+            role: rec.get("role"),
+        })
+    }
 }

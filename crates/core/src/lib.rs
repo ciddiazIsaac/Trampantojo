@@ -190,6 +190,23 @@ pub fn hash_api_key(key: &str) -> String {
 #[async_trait::async_trait]
 pub trait ApiKeyRepository: Send + Sync {
     async fn find_by_hash(&self, hash: &str) -> anyhow::Result<Option<ApiKeyInfo>>;
+    async fn find_by_org(&self, org_id: Uuid) -> anyhow::Result<Vec<ApiKeyInfo>>;
+    async fn create(&self, org_id: Uuid, plan: &str, key_hash: &str) -> anyhow::Result<ApiKeyInfo>;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct User {
+    pub id: Uuid,
+    pub email: String,
+    pub password_hash: String,
+    pub org_id: Uuid,
+    pub role: String,
+}
+
+#[async_trait::async_trait]
+pub trait UserRepository: Send + Sync {
+    async fn find_by_email(&self, email: &str) -> anyhow::Result<Option<User>>;
+    async fn create_user(&self, email: &str, password_hash: &str, org_id: Uuid, role: &str) -> anyhow::Result<User>;
 }
 
 // ---------------------------------------------------------------------

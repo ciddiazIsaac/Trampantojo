@@ -134,12 +134,13 @@ where
 // Estado compartido de la aplicación
 // ---------------------------------------------------------------------------
 
-use trampantojo_core::ApiKeyRepository;
+use trampantojo_core::{ApiKeyRepository, UserRepository};
 
 #[derive(Clone)]
 pub struct AppState {
     pub repo: Arc<dyn IocRepository>,
     pub api_keys: Arc<dyn ApiKeyRepository>,
+    pub users: Arc<dyn UserRepository>,
     pub rate_limiter: Arc<storage::rate_limit::RedisRateLimiter>,
     pub pipeline: Arc<IngestionPipeline>,
     pub stats_store: Arc<dyn trampantojo_core::IocStatsStore>,
@@ -352,7 +353,8 @@ async fn main() -> anyhow::Result<()> {
 
     let state = AppState {
         repo: repo_arc.clone(),
-        api_keys: repo_arc,
+        api_keys: repo_arc.clone(),
+        users: repo_arc.clone(),
         rate_limiter: Arc::new(storage::rate_limit::RedisRateLimiter::new(redis_conn)),
         pipeline,
         stats_store: Arc::new(event_store),
@@ -372,8 +374,19 @@ async fn main() -> anyhow::Result<()> {
             middleware::rate_limit_middleware,
         ));
 
+    let auth_routes = Router::new()
+        .route("/auth/register", post(routes::auth::register_user))
+        .route("/auth/login", post(routes::auth::login_user));
+
+    let protected_api_keys = Router::new()
+        .route("/v1/api-keys", get(routes::api_keys::list_api_keys))
+        .route("/v1/api-keys", post(routes::api_keys::create_api_key))
+        .route_layer(axum::middleware::from_fn(middleware::jwt_middleware));
+
     let app = Router::new()
         .route("/healthz", get(healthz))
+        .merge(auth_routes)
+        .merge(protected_api_keys)
         .merge(api_routes)
         .with_state(state);
 
