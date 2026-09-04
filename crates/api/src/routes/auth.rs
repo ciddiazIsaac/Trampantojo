@@ -119,3 +119,40 @@ fn issue_jwt(email: &str, org_id: String, role: &str) -> Result<String, ApiError
         ApiError::Internal
     })
 }
+
+// ---------------------------------------------------------------------------
+// POST /auth/forgot-password
+//
+// Stub de la Fase 2 — recibe el email y lo registra en los logs.
+// El envío real del correo de recuperación se implementará en la Fase 3
+// una vez integrado el proveedor de email (SendGrid / Resend / SES).
+//
+// La respuesta es siempre 200 independientemente de si el email existe
+// en la DB, para no filtrar información sobre qué usuarios están registrados
+// (enumeración de usuarios).
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct ForgotPasswordRequest {
+    pub email: String,
+}
+
+#[derive(Serialize)]
+pub struct ForgotPasswordResponse {
+    pub message: String,
+}
+
+pub async fn forgot_password(
+    Json(payload): Json<ForgotPasswordRequest>,
+) -> Json<ForgotPasswordResponse> {
+    // TODO (Fase 3): buscar usuario en DB, generar token de reset con TTL corto,
+    // persistirlo y enviar email con link de recuperación.
+    tracing::info!(
+        email = %payload.email,
+        "solicitud de recuperación de contraseña recibida (stub — sin envío de email)"
+    );
+
+    Json(ForgotPasswordResponse {
+        message: "Si ese email existe en nuestra base de datos, recibirás un enlace de recuperación en breve.".to_string(),
+    })
+}

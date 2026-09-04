@@ -376,7 +376,8 @@ async fn main() -> anyhow::Result<()> {
 
     let auth_routes = Router::new()
         .route("/auth/register", post(routes::auth::register_user))
-        .route("/auth/login", post(routes::auth::login_user));
+        .route("/auth/login", post(routes::auth::login_user))
+        .route("/auth/forgot-password", post(routes::auth::forgot_password));
 
     let protected_api_keys = Router::new()
         .route("/v1/api-keys", get(routes::api_keys::list_api_keys))

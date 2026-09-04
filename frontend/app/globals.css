@@ -855,3 +855,459 @@ body {
   color: var(--text-primary);
 }
 
+/* ==========================================================================
+   Auth Pages — Login, Register, Forgot Password
+   ========================================================================== */
+
+/* Página completa */
+.auth-page {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(20px, 4vw, 40px);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Fondo animado */
+.auth-bg {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.auth-bg-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.5;
+  animation: auth-orb-float 8s ease-in-out infinite alternate;
+}
+
+.auth-bg-orb-1 {
+  width: 500px;
+  height: 500px;
+  top: -120px;
+  left: -100px;
+  background: radial-gradient(ellipse, rgba(59, 130, 246, 0.22) 0%, transparent 70%);
+  animation-delay: 0s;
+}
+
+.auth-bg-orb-2 {
+  width: 400px;
+  height: 400px;
+  bottom: -80px;
+  right: -80px;
+  background: radial-gradient(ellipse, rgba(124, 58, 237, 0.18) 0%, transparent 70%);
+  animation-delay: -4s;
+}
+
+.auth-bg-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(99, 170, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(99, 170, 255, 0.03) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+
+@keyframes auth-orb-float {
+  0%   { transform: translate(0, 0) scale(1); }
+  100% { transform: translate(20px, 30px) scale(1.06); }
+}
+
+/* Wrapper de la card — limita el ancho y apila verticalmente */
+.auth-card-wrapper {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 24px;
+  animation: auth-enter 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes auth-enter {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Logo */
+.auth-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  color: var(--text-primary);
+  transition: opacity 0.15s;
+}
+
+.auth-logo:hover {
+  opacity: 0.85;
+}
+
+.auth-logo-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--accent-500), #7c3aed);
+  box-shadow: 0 0 20px rgba(59, 130, 246, 0.45);
+  flex-shrink: 0;
+}
+
+.auth-logo-name {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+/* Card principal */
+.auth-card {
+  width: 100%;
+  background: rgba(13, 20, 36, 0.80);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xl);
+  padding: clamp(24px, 5vw, 36px);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+    0 4px 32px rgba(0, 0, 0, 0.5),
+    var(--shadow-glow);
+}
+
+.auth-card-header {
+  margin-bottom: 28px;
+  text-align: center;
+}
+
+.auth-card-title {
+  font-size: clamp(20px, 3vw, 26px);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.auth-card-subtitle {
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.55;
+  max-width: 300px;
+  margin-inline: auto;
+}
+
+/* Formulario */
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* Campo (label + input + error) */
+.auth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.auth-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.01em;
+}
+
+.auth-input-wrapper {
+  position: relative;
+}
+
+.auth-input {
+  width: 100%;
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+}
+
+.auth-input::placeholder {
+  color: var(--text-muted);
+}
+
+.auth-input:focus {
+  border-color: var(--accent-500);
+  background: rgba(59, 130, 246, 0.05);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+
+.auth-input-error {
+  border-color: var(--threat-500) !important;
+  background: rgba(239, 68, 68, 0.05) !important;
+}
+
+.auth-input-error:focus {
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.12) !important;
+}
+
+/* Padding extra derecho para el botón de ojo */
+.auth-input-password {
+  padding-right: 44px;
+}
+
+/* Botón toggle de visibilidad */
+.auth-input-eye {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  padding: 4px;
+  border-radius: 4px;
+  transition: color 0.15s;
+}
+
+.auth-input-eye:hover {
+  color: var(--text-secondary);
+}
+
+/* Mensaje de error de campo */
+.auth-field-error {
+  font-size: 12px;
+  color: var(--threat-400);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Link de "olvidé contraseña" */
+.auth-forgot-link {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-decoration: none;
+  text-align: right;
+  transition: color 0.15s;
+  align-self: flex-end;
+}
+
+.auth-forgot-link:hover {
+  color: var(--accent-400);
+}
+
+/* Botón de submit */
+.auth-submit-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 13px 20px;
+  border-radius: var(--radius-md);
+  border: none;
+  background: linear-gradient(135deg, var(--accent-500) 0%, #6d28d9 100%);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: opacity 0.2s, transform 0.15s, box-shadow 0.2s;
+  box-shadow: 0 4px 20px rgba(59, 130, 246, 0.3);
+  margin-top: 4px;
+}
+
+.auth-submit-btn:hover:not(:disabled) {
+  opacity: 0.92;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 24px rgba(59, 130, 246, 0.4);
+}
+
+.auth-submit-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.auth-submit-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Spinner inline */
+.auth-spinner {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.65s linear infinite;
+}
+
+/* Alerta de error del servidor */
+.auth-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  font-size: 13.5px;
+  line-height: 1.5;
+  margin-bottom: 4px;
+}
+
+.auth-alert-error {
+  background: var(--threat-bg);
+  border: 1px solid var(--threat-border);
+  color: var(--threat-400);
+}
+
+.auth-alert-success {
+  background: var(--safe-bg);
+  border: 1px solid var(--safe-border);
+  color: var(--safe-400);
+}
+
+/* Link de cambio (login ↔ registro) */
+.auth-switch-text {
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: center;
+  margin-top: 20px;
+}
+
+.auth-switch-link {
+  color: var(--accent-400);
+  text-decoration: none;
+  font-weight: 600;
+  transition: color 0.15s;
+}
+
+.auth-switch-link:hover {
+  color: var(--accent-300);
+}
+
+/* Footer de la auth page */
+.auth-footer-text {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* ==========================================================================
+   Password Strength Bar
+   ========================================================================== */
+
+.pwd-strength {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.pwd-strength-bars {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+}
+
+.pwd-strength-bar {
+  flex: 1;
+  height: 3px;
+  border-radius: 99px;
+}
+
+.pwd-strength-label {
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  min-width: 70px;
+  text-align: right;
+}
+
+/* ==========================================================================
+   Success State (forgot-password)
+   ========================================================================== */
+
+.auth-success-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 0;
+}
+
+.auth-success-icon-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--safe-bg);
+  border: 1px solid var(--safe-border);
+  color: var(--safe-400);
+  animation: auth-success-pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+@keyframes auth-success-pop {
+  from { transform: scale(0.5); opacity: 0; }
+  to   { transform: scale(1);   opacity: 1; }
+}
+
+.auth-success-body {
+  text-align: center;
+}
+
+.auth-success-detail {
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.auth-success-email {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* ==========================================================================
+   Glass panel — usado por dashboard/page.tsx (clase existente en Tailwind JIT)
+   ========================================================================== */
+
+/* glass-panel ya existe como clase de Tailwind en el proyecto;
+   lo redefinimos aquí como fallback CSS puro por si acaso */
+.glass-panel {
+  background: rgba(13, 20, 36, 0.75);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+/* primary y primary-foreground para compatibilidad con dashboard/login previo */
+.text-primary { color: var(--accent-400); }
+.bg-primary { background-color: var(--accent-500); }
+.text-primary-foreground { color: #fff; }
+
+/* Responsive auth */
+@media (max-width: 480px) {
+  .auth-card {
+    padding: 24px 20px;
+    border-radius: var(--radius-lg);
+  }
+
+  .auth-card-wrapper {
+    gap: 16px;
+  }
+}

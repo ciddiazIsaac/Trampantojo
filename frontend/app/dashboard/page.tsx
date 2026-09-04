@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Key, Plus, Copy, LogOut, Check } from 'lucide-react';
+import { Key, Plus, Copy, LogOut, Check, ShieldAlert } from 'lucide-react';
+import { clearToken, getToken } from '../../lib/auth';
 
 interface ApiKey {
   key_hash: string;
@@ -22,7 +23,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     const fetchKeys = async () => {
-      const token = localStorage.getItem('token');
+      const token = getToken();
       if (!token) {
         router.push('/login');
         return;
@@ -37,7 +38,7 @@ export default function DashboardPage() {
 
         if (!res.ok) {
           if (res.status === 401) {
-            localStorage.removeItem('token');
+            clearToken();
             router.push('/login');
             return;
           }
@@ -57,7 +58,7 @@ export default function DashboardPage() {
   }, [router]);
 
   const handleGenerateKey = async () => {
-    const token = localStorage.getItem('token');
+    const token = getToken();
     if (!token) return;
 
     setGenerating(true);
@@ -85,7 +86,7 @@ export default function DashboardPage() {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('token');
+    clearToken();
     router.push('/login');
   };
 
